@@ -427,18 +427,185 @@ function getFileUrl(filename) {
 }
 
 // ============================================================
+// Supabase Data Adapters
+// Replaces the static /data/* fetches above with Supabase queries. Each adapter
+// returns data in the SAME shape/property-names the existing (unmodified)
+// parsing/rendering code elsewhere in this file already expects, so nothing
+// downstream needs to change. See scripts/supabase_migration/schema.sql for the
+// get_sa3_geojson/get_sa2_geojson/get_mmm_benchmark/get_clinics/get_sa1_centroids/
+// get_clinic_isochrone RPC definitions this relies on.
+// ============================================================
+
+function getSupabaseClient() {
+    // Reuses the client map.html already creates for auth (window.supabase_client) --
+    // don't create a second client instance. Script-tag order already makes this
+    // reliably available in practice; this poll is just a cheap safety net.
+    return new Promise((resolve) => {
+        if (window.supabase_client) return resolve(window.supabase_client);
+        const interval = setInterval(() => {
+            if (window.supabase_client) {
+                clearInterval(interval);
+                resolve(window.supabase_client);
+            }
+        }, 50);
+    });
+}
+
+async function fetchSa3Geojson() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_sa3_geojson');
+    if (error) throw new Error(`Failed to load sa3 geojson: ${error.message}`);
+    return data;
+}
+
+async function fetchSa2Geojson() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_sa2_geojson');
+    if (error) throw new Error(`Failed to load sa2 geojson: ${error.message}`);
+    return data;
+}
+
+async function fetchMmmBenchmark() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_mmm_benchmark');
+    if (error) { console.warn('[mmm] failed to load:', error.message); return null; }
+    return data;
+}
+
+async function fetchSa1Centroids() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_sa1_centroids');
+    if (error) { console.warn('[sa1] failed to load:', error.message); return null; }
+    return data;
+}
+
+async function fetchMarketConfigFromSupabase(marketId) {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.from('markets').select('config').eq('market_id', marketId).single();
+    if (error) throw new Error(`Failed to load config for market: ${marketId} (${error.message})`);
+    return data.config;
+}
+
+async function fetchClinicIsochroneGeojson(marketId, clinicId) {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_clinic_isochrone', {
+        p_market_id: marketId, p_clinic_id: String(clinicId)
+    });
+    if (error) { console.warn('[isochrone] rpc error:', error.message); return null; }
+    return data; // null when the clinic has no isochrone (matches old !response.ok path)
+}
+
+function boolToYesNo(v) {
+    if (v === true) return 'Yes';
+    if (v === false) return 'No';
+    return '';
+}
+
+// Reconstructs legacy raw-CSV-shaped rows from Supabase's normalized `clinics`
+// columns, keyed by market — feeds straight into the existing, unmodified
+// normalizeClinicData()/universal-normalization pipeline in loadMarketData() below.
+const LEGACY_COLUMN_MAP = {
+    gp: (row) => ({
+        clinic_id: row.clinic_id,
+        clinic_name: row.name,
+        'Corporate Chain': row.corporate_chain,
+        ownership: row.ownership,
+        clinic_format: row.clinic_format,
+        'Billing Type': row.billing_type,
+        Pathology: boolToYesNo(row.pathology),
+        'Radiology/Imaging': boolToYesNo(row.radiology_imaging),
+        'Allied Health': boolToYesNo(row.allied_health),
+        website: row.website,
+        'Doctor Names Clean': row.doctor_names,
+        google_review_count: row.google_review_count,
+        google_rating: row.google_rating,
+        gp_count: row.gp_count,
+        address: row.address,
+        suburb: row.suburb,
+        state_code: row.state_code,
+        postcode: row.postcode,
+        longitude: row.longitude,
+        latitude: row.latitude,
+        sa1_code: row.sa1_code,
+        sa2_code: row.sa2_code,
+        sa2_name: row.sa2_name,
+        sa2_area_km2: row.sa2_area_km2,
+        sa3_code: row.sa3_code,
+        sa3_name: row.sa3_name,
+        sa4_code: row.sa4_code,
+        sa4_name: row.sa4_name,
+        gccsa_code: row.gccsa_code,
+        gccsa_name: row.gccsa_name,
+        state_name: row.state_name,
+        nhsd_service_id: row.nhsd_service_id,
+        nhsd_service_type: row.nhsd_service_type,
+        gnaf_address_id: row.gnaf_address_id,
+        geographic_area_class: row.geographic_area_class,
+        geographic_source_date: row.geographic_source_date,
+        Format_Confidence: row.format_confidence,
+    }),
+    physio: (row) => ({
+        PracticeID: row.clinic_id,
+        PracticeName: row.name,
+        FullAddress: row.address,
+        Address1: row.address1,
+        City: row.suburb,
+        State: row.state_code,
+        Postcode: row.postcode,
+        Phone: row.phone,
+        Email: row.email,
+        Website: row.website,
+        Lat: row.latitude,
+        Lon: row.longitude,
+        NDIS: row.ndis ? 1 : 0,
+        Telehealth: row.telehealth ? 1 : 0,
+        rank: row.rank,
+        sa3_code: row.sa3_code,
+        sa3_name: row.sa3_name,
+        segments: Array.isArray(row.segments) ? row.segments.join(', ') : row.segments,
+        primary_segment: row.primary_segment,
+        confidence: row.confidence,
+    }),
+    // Untested (0 dental clinics exist yet) -- forward-compatible best guess based on
+    // dental/market_config.json's clinic_fields (ownership_type/billing_type naming),
+    // mirrored from the gp shape since dental's raw CSV column set was never finalized.
+    dental: (row) => ({
+        clinic_id: row.clinic_id,
+        clinic_name: row.name,
+        ownership_type: row.ownership,
+        clinic_format: row.clinic_format,
+        billing_type: row.billing_type,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        sa3_code: row.sa3_code,
+        sa3_name: row.sa3_name,
+        address: row.address,
+        suburb: row.suburb,
+        state_code: row.state_code,
+        postcode: row.postcode,
+        website: row.website,
+    }),
+};
+
+async function fetchClinicsForMarket(marketId) {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_clinics', { p_market_id: marketId });
+    if (error) throw new Error(`Failed to load clinics for market: ${marketId} (${error.message})`);
+    const reshape = LEGACY_COLUMN_MAP[marketId] || LEGACY_COLUMN_MAP.gp;
+    return (data || []).map(reshape);
+}
+
+// ============================================================
 // Market Management
 // ============================================================
 
 async function loadMarketConfig(marketId) {
     /**
-     * Load market configuration from market_config.json
-     * Returns config object with market metadata, colors, field mappings
+     * Load market configuration (markets.config in Supabase — the same object
+     * market_config.json used to be, 1:1)
      */
     try {
-        const response = await fetch(`/data/markets/${marketId}/market_config.json`);
-        if (!response.ok) throw new Error(`Failed to load config for market: ${marketId}`);
-        const config = await response.json();
+        const config = await fetchMarketConfigFromSupabase(marketId);
         console.log(`[market] loaded config for ${marketId}:`, config);
         return config;
     } catch (e) {
@@ -549,40 +716,27 @@ async function loadSharedData(progressCb) {
      */
     progressCb('Loading geographic data…');
 
-    const [sa3Res, rawRes, bmRes, sa1Res] = await Promise.all([
-        fetch(getFileUrl('sa3_scored.geojson')),
-        fetch(getFileUrl('sa3_raw.csv')).catch(() => null),
-        fetch(getFileUrl('mmm_benchmark.json')).catch(() => null),
-        fetch(getFileUrl('sa1_centroids_pop.csv')).catch(() => null),
+    const [sa3Json, bmJson, sa1Data] = await Promise.all([
+        fetchSa3Geojson(),
+        fetchMmmBenchmark(),
+        fetchSa1Centroids(),
     ]);
-
-    if (!sa3Res.ok) throw new Error('Failed to load sa3_scored.geojson');
 
     progressCb('Parsing geographic data…');
-    const [sa3Json, rawText, bmJson, sa1Text] = await Promise.all([
-        sa3Res.json(),
-        rawRes?.ok ? rawRes.text() : Promise.resolve(null),
-        bmRes?.ok ? bmRes.json() : Promise.resolve(null),
-        sa1Res?.ok ? sa1Res.text() : Promise.resolve(null),
-    ]);
 
     State.sa3Data = sa3Json;
 
-    if (rawText) {
-        const rawParsed = Papa.parse(rawText, {
-            header: true, skipEmptyLines: true, transformHeader: h => h.trim()
-        });
-        rawParsed.data.forEach(row => {
-            const code = row['SA3 Code'] || row['SA3_Code'];
-            if (code) State.sa3RawLookup[String(code).trim()] = row;
-        });
-    }
+    // sa3_raw.csv (population_sa3.csv) is folded into get_sa3_geojson()'s properties
+    // now -- derive the lookup from the same object instead of a second query.
+    State.sa3Data.features.forEach(feat => {
+        const code = feat.properties.SA3Code;
+        if (code) State.sa3RawLookup[String(code).trim()] = feat.properties;
+    });
 
     if (bmJson) State.mmmBenchmark = bmJson;
 
-    if (sa1Text) {
-        const sa1Parsed = Papa.parse(sa1Text, { header: true, skipEmptyLines: true, dynamicTyping: true });
-        State.sa1CentroidData = sa1Parsed.data;
+    if (sa1Data) {
+        State.sa1CentroidData = sa1Data;
         console.log(`[sa1] loaded ${State.sa1CentroidData.length} SA1 centroids`);
     }
 
@@ -607,17 +761,13 @@ async function loadMarketData(marketId, progressCb) {
     const config = await loadMarketConfig(marketId);
     State.markets.config = config;
 
-    // Fetch clinic CSV
-    const clinicsPath = `/data/markets/${config.clinics_file.split('/')[1]}/${config.clinics_file.split('/')[2]}`;
-    const clinicsRes = await fetch(clinicsPath);
-    if (!clinicsRes.ok) throw new Error(`Failed to load clinics for market: ${marketId}`);
+    // Fetch clinics (Supabase clinics table, reshaped to legacy CSV column names)
+    const legacyShapedRows = await fetchClinicsForMarket(marketId);
 
     progressCb(`Parsing ${marketId} clinic data…`);
-    const clinicsText = await clinicsRes.text();
-    const parsed = Papa.parse(clinicsText, { header: true, skipEmptyLines: true });
 
     // Normalize clinic data using market config field mapping
-    let clinicsData = normalizeClinicData(parsed.data, config.clinic_fields);
+    let clinicsData = normalizeClinicData(legacyShapedRows, config.clinic_fields);
     clinicsData = clinicsData.filter(d => d.latitude && d.longitude);
 
     // Universal normalization (all markets)
@@ -1584,13 +1734,11 @@ async function ensureSEIFALayer() {
         return;
     }
 
-    // Fetch the 7.2 MB file on demand (shown once per session; browser caches it)
+    // Loaded on demand (shown once per session)
     try {
-        const res = await fetch(getFileUrl('sa2_seifa.geojson'));
-        if (!res.ok) { console.warn('sa2_seifa.geojson unavailable'); return; }
-        State.sa2Data = await res.json();
+        State.sa2Data = await fetchSa2Geojson();
     } catch (e) {
-        console.warn('sa2_seifa.geojson fetch failed:', e);
+        console.warn('sa2 geojson load failed:', e);
         return;
     }
 
@@ -5873,20 +6021,15 @@ function loadAndShowIsochroneFromDrawer(clinicId) {
 
 async function loadAndShowIsochrone(clinic) {
     try {
-        // Isochrone files are named by clinic_id: isochrone_[clinic_id].geojson
         // Use current market from State
         const market = State.markets.current || 'gp';
-        const url = `/data/markets/${market}/isochrones/isochrone_${clinic.clinic_id}.geojson`;
-        console.log('[loadAndShowIsochrone] Loading from:', url, 'clinic:', clinic.clinic_name, 'market:', market);
-        const response = await fetch(url);
+        console.log('[loadAndShowIsochrone] Loading for clinic:', clinic.clinic_name, 'market:', market);
+        const iso = await fetchClinicIsochroneGeojson(market, clinic.clinic_id);
 
-        let iso = null;
-        console.log('[loadAndShowIsochrone] response status:', response.status, 'ok:', response.ok);
-        if (response.ok) {
-            iso = await response.json();
+        if (iso) {
             console.log('[loadAndShowIsochrone] Isochrone loaded successfully, features:', iso.features?.length);
         } else {
-            console.warn(`[loadAndShowIsochrone] Isochrone not available for ${clinic.clinic_name} (${clinic.clinic_id}) in ${market} market (${response.status})`);
+            console.warn(`[loadAndShowIsochrone] Isochrone not available for ${clinic.clinic_name} (${clinic.clinic_id}) in ${market} market`);
         }
 
         // Check if we already have a comparison clinic
