@@ -1,0 +1,1905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Foundry Intelligence Platform</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- Mapbox GL JS v3 -->
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
+
+    <!-- PapaParse for CSV -->
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+    <!-- Turf.js for point-in-polygon -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+    <!-- Supabase Auth -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <link rel="stylesheet" href="css/styles.css?v=mob4" />
+    <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
+    <style>
+        /* Hide login buttons */
+        #login-btn, #logout-btn, .mob-more-item[href*="auth"], #auth-form {
+            display: none !important;
+        }
+
+        /* Compact legend display - sticky to bottom of rail */
+        .legend-display {
+            border-top: 1px solid var(--hairline);
+            padding: 6px 12px;
+            background: #FFFFFF;
+            position: sticky;
+            bottom: 40px;
+            left: 0;
+            right: 0;
+            width: 100%;
+            z-index: 10;
+            box-shadow: 0 -1px 3px rgba(0,0,0,0.05);
+        }
+
+        .legend-display-body {
+            overflow: visible;
+        }
+
+        .legend-display-body .acc-row {
+            padding: 0;
+            margin: 0;
+        }
+
+        .legend-display-body .rail-eyebrow {
+            font-size: 8px;
+            margin-bottom: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        .legend-display-body .tier-legend {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .legend-display-body .tier-legend-item {
+            font-size: 11px;
+            padding: 1px 0;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .legend-display-body .tier-legend-item-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 1px;
+            flex-shrink: 0;
+        }
+
+        .legend-display-body .tier-legend-item-label {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            flex: 1;
+        }
+
+        .legend-display-body .tier-legend-item-label-name {
+            font-weight: 500;
+        }
+
+        .legend-display-body .tier-legend-item-label-range {
+            font-size: 9px;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+
+        /* Grey out clinics section for physio (collapsed) */
+        #acc-clinics.physio-disabled {
+            opacity: 0.5;
+        }
+
+        #acc-clinics.physio-disabled .rail-accordion-hdr {
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        #acc-clinics.physio-disabled .rail-accordion-body {
+            opacity: 0.8;
+            pointer-events: none;
+        }
+
+        /* Fix data vintage at bottom of left rail */
+        .rail-footer-bar {
+            position: sticky;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #FFFFFF;
+            border-top: 1px solid var(--hairline);
+            padding: 12px 16px;
+            font-size: 11px;
+            color: #999;
+            z-index: 20;
+            width: 100%;
+            box-shadow: 0 -1px 3px rgba(0,0,0,0.05);
+        }
+    </style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div class="loader" id="loader">
+    <div class="loader-content">
+        <div class="loader-mark">FH</div>
+        <div class="loader-text">Foundry Intelligence Platform</div>
+        <div class="loader-progress" id="loader-progress">Initialising…</div>
+    </div>
+</div>
+
+<div class="app">
+
+    <!-- ============================================================
+         Header
+         ============================================================ -->
+    <header class="app-header">
+        <!-- Brand (left) -->
+        <a class="brand" href="index.html" style="text-decoration:none;color:inherit;cursor:pointer;flex-shrink:0;">
+            <span class="brand-mark">FH</span>
+            <span class="brand-divider"></span>
+            <span class="brand-wordmark">FOUNDRY HEALTH</span>
+        </a>
+
+        <span class="brand-divider" style="margin: 0 20px;"></span>
+
+        <!-- Market display pill — click navigates to index.html to switch market -->
+        <a class="market-switcher-wrapper" id="market-switcher-wrapper" href="index.html" style="flex-shrink:0; text-decoration:none;">
+            <div class="market-switcher-pill" id="market-selector-btn" aria-label="Go to home to switch market">
+                <span class="market-switcher-ab" id="market-selector-label">GP</span>
+                <span class="market-switcher-tx">
+                    <span class="market-switcher-eyebrow">MARKET</span>
+                    <span class="market-switcher-name" id="market-switcher-name">General Practice</span>
+                </span>
+            </div>
+        </a>
+
+        <!-- Spacer pushes actions to right -->
+        <div style="flex:1;"></div>
+
+        <div class="actions">
+            <span class="action-meta">Data vintage · Mar 2025</span>
+            <button id="login-btn" class="nav-btn login">Login</button>
+            <button id="logout-btn" class="nav-btn logout" style="display: none;">Logout</button>
+        </div>
+    </header>
+
+    <!-- ============================================================
+         Mobile-only top bar (visible <1024px)
+         ============================================================ -->
+    <header class="mob-topbar" id="mob-topbar">
+        <a class="mob-brand" id="mob-market-switcher" href="index.html" aria-label="Switch market">
+            <span class="brand-mark">FH</span>
+            <span class="mob-title" id="mob-market-name">General Practice</span>
+            <span class="mob-market-caret" aria-hidden="true">▾</span>
+        </a>
+
+    </header>
+
+    <!-- ============================================================
+         Mobile-only lens scroller (visible <1024px)
+         Buttons mirror desktop .lens-seg / .lens-nra-item — same handlers
+         ============================================================ -->
+    <div class="mob-lens-scroller" id="mob-lens-scroller">
+        <button class="mob-lens-chip lens-seg active" data-lens="composite">Composite</button>
+        <button class="mob-lens-chip lens-seg" data-lens="whitespace">Whitespace</button>
+        <button class="mob-lens-chip lens-seg" data-lens="seifa">SEIFA</button>
+        <button class="mob-lens-chip lens-seg" data-lens="workforce">Workforce</button>
+        <button class="mob-lens-chip mob-lens-nra" id="mob-lens-nra-btn">GP Billings <span class="mob-lens-arrow">▾</span></button>
+        <button class="mob-search-btn" id="mob-search-btn" aria-label="Search">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+        </button>
+    </div>
+
+    <!-- Mobile NRA picker (action-sheet style; hidden by default) -->
+    <div class="mob-nra-picker" id="mob-nra-picker">
+        <div class="mob-nra-picker-backdrop"></div>
+        <div class="mob-nra-picker-sheet">
+            <div class="mob-nra-picker-title">GP Billings lens</div>
+            <button class="mob-nra-picker-item lens-seg" data-lens="nra-fees-per-service">Avg fees per service</button>
+            <button class="mob-nra-picker-item lens-seg" data-lens="nra-total-fees">Total fees</button>
+            <button class="mob-nra-picker-item lens-seg" data-lens="nra-bb">Bulk billing %</button>
+            <button class="mob-nra-picker-item lens-seg" data-lens="nra-fee-cagr">3Y fee CAGR</button>
+            <button class="mob-nra-picker-item lens-seg" data-lens="nra-bb-cagr">3Y BB% CAGR</button>
+            <button class="mob-nra-picker-cancel" id="mob-nra-picker-cancel">Cancel</button>
+        </div>
+    </div>
+
+
+    <!-- ============================================================
+         Main view region
+         ============================================================ -->
+    <main class="app-main">
+
+        <!-- ====================== Login modal ====================== -->
+        <section class="view view-login" data-view="login" style="display: none;">
+        <script>
+            // Wait for Supabase to load, then initialize auth
+            const waitForSupabase = setInterval(() => {
+                if (window.supabase && window.supabase.createClient) {
+                    clearInterval(waitForSupabase);
+
+                    // Initialize Supabase
+                    const SUPABASE_URL = 'https://hmrkfodbrtictkjjzjcv.supabase.co';
+                    const SUPABASE_ANON_KEY = 'sb_publishable_ARgPJSrGyanqcK-T1zFDcw_SJXKbPgi';
+                    window.supabase_client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                    console.log('[Auth] Supabase client initialized');
+
+                    // Define auth functions globally
+                    window.showAppView = function(viewName) {
+                        // Delegate to the app's own view switcher when available — it
+                        // correctly targets the <section class="view"> elements (not nav
+                        // buttons), toggles nav state, and calls map.resize().
+                        if (typeof switchView === 'function') {
+                            switchView(viewName);
+                            return;
+                        }
+                        // Fallback before app.js loads: target sections specifically.
+                        document.querySelectorAll('.view').forEach(v => {
+                            v.classList.toggle('active', v.dataset.view === viewName);
+                        });
+                        if (viewName === 'map' && window.appMap) {
+                            setTimeout(() => window.appMap.resize(), 50);
+                        }
+                    };
+
+                    window.handleLogin = async function(email, password) {
+                        console.log('[Auth] handleLogin called with:', email);
+                        const errorEl = document.getElementById('auth-error');
+                        errorEl.textContent = '';
+                        errorEl.style.color = '#d32f2f';
+                        try {
+                            const { data, error } = await window.supabase_client.auth.signInWithPassword({ email, password });
+                            if (error) {
+                                console.error('[Auth] Login error:', error);
+                                errorEl.textContent = error.message;
+                                return;
+                            }
+                            console.log('[Auth] Login successful:', data.user.email);
+                            document.getElementById('logout-btn').style.display = 'block';
+                            window.showAppView('map');
+                        } catch (error) {
+                            console.error('[Auth] Login exception:', error);
+                            errorEl.textContent = 'Login failed: ' + error.message;
+                        }
+                    };
+
+                    window.handleSignup = async function(email, password) {
+                        console.log('[Auth] handleSignup called with:', email);
+                        const errorEl = document.getElementById('auth-error');
+                        errorEl.textContent = '';
+                        errorEl.style.color = '#d32f2f';
+                        try {
+                            const { data, error } = await window.supabase_client.auth.signUp({ email, password });
+                            if (error) {
+                                console.error('[Auth] Signup error:', error);
+                                errorEl.textContent = error.message;
+                                return;
+                            }
+                            console.log('[Auth] Signup successful:', data.user.email);
+                            errorEl.style.color = 'green';
+                            errorEl.textContent = 'Signup successful! Check your email to confirm your account.';
+                            document.getElementById('auth-email').value = '';
+                            document.getElementById('auth-password').value = '';
+                        } catch (error) {
+                            console.error('[Auth] Signup exception:', error);
+                            errorEl.textContent = 'Signup failed: ' + error.message;
+                        }
+                    };
+
+                    window.handleGoogleLogin = async function() {
+                        console.log('[Auth] handleGoogleLogin called');
+                        const errorEl = document.getElementById('auth-error');
+                        errorEl.textContent = '';
+                        try {
+                            const { error } = await window.supabase_client.auth.signInWithOAuth({
+                                provider: 'google',
+                                options: { redirectTo: window.location.href.split('#')[0] }
+                            });
+                            if (error) {
+                                console.error('[Auth] Google login error:', error);
+                                errorEl.textContent = error.message;
+                            }
+                        } catch (error) {
+                            console.error('[Auth] Google login exception:', error);
+                            errorEl.textContent = 'Google login failed: ' + error.message;
+                        }
+                    };
+
+                    window.handleLogout = async function() {
+                        await window.supabase_client.auth.signOut();
+                        window.showAppView('login');
+                        location.reload();
+                    };
+
+                    // Wire up button listeners
+                    const headerLoginBtn = document.getElementById('login-btn');
+                    const authLoginBtn = document.getElementById('auth-login-btn');
+                    const authSignupBtn = document.getElementById('auth-signup-btn');
+                    const authGoogleBtn = document.getElementById('auth-google-btn');
+                    const headerLogoutBtn = document.getElementById('logout-btn');
+                    const authForm = document.getElementById('auth-form');
+                    const loginView = document.querySelector('[data-view="login"]');
+
+                    // Show/hide login modal when clicking header Login button
+                    if (headerLoginBtn) {
+                        headerLoginBtn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            if (loginView) {
+                                loginView.style.display = loginView.style.display === 'none' ? 'flex' : 'none';
+                                if (loginView.style.display === 'flex') {
+                                    document.getElementById('auth-email').focus();
+                                }
+                            }
+                        });
+                    }
+
+                    // Auth form handlers
+                    if (authLoginBtn) {
+                        authLoginBtn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            const email = document.getElementById('auth-email').value;
+                            const password = document.getElementById('auth-password').value;
+                            window.handleLogin(email, password);
+                        });
+                    }
+
+                    if (authSignupBtn) {
+                        authSignupBtn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            const email = document.getElementById('auth-email').value;
+                            const password = document.getElementById('auth-password').value;
+                            window.handleSignup(email, password);
+                        });
+                    }
+
+                    if (authGoogleBtn) {
+                        authGoogleBtn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            window.handleGoogleLogin();
+                        });
+                    }
+
+                    if (headerLogoutBtn) {
+                        headerLogoutBtn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            window.handleLogout();
+                        });
+                    }
+
+                    if (authForm) {
+                        authForm.addEventListener('keypress', (e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const email = document.getElementById('auth-email').value;
+                                const password = document.getElementById('auth-password').value;
+                                window.handleLogin(email, password);
+                            }
+                        });
+                    }
+
+                    console.log('[Auth] Button listeners wired successfully');
+
+                    // Initialize public app (map loads for everyone)
+                    const initializePublicApp = () => {
+                        console.log('[Auth] Initializing public app');
+                        window.showAppView('map');
+                        // Try to initialize map if app.js is ready
+                        tryInitMap();
+                    };
+
+                    // Try to initialize map
+                    const tryInitMap = () => {
+                                if (typeof init === 'function' && typeof State !== 'undefined') {
+                            console.log('[Auth] Calling init() to load map');
+                            const mapContainer = document.getElementById('map');
+                            if (mapContainer) mapContainer.innerHTML = '';
+                            try {
+                                init();
+                                console.log('[Auth] Map initialized successfully');
+                            } catch (error) {
+                                console.error('[Auth] init() error:', error);
+                            }
+                            return true;
+                        }
+                        return false;
+                    };
+
+                    // Initialize public map after delay (wait for right-rail.js)
+                    setTimeout(() => {
+                        if (!tryInitMap()) {
+                            let attempts = 0;
+                            const waitInterval = setInterval(() => {
+                                if (tryInitMap()) clearInterval(waitInterval);
+                                if (++attempts > 20) clearInterval(waitInterval);
+                            }, 500);
+                        }
+                    }, 2000);
+
+                    // Handle authentication state changes
+                    window.supabase_client.auth.onAuthStateChange((event, session) => {
+                        console.log('[Auth] Auth state changed:', event, !!session);
+                        if (session) {
+                            console.log('[Auth] User logged in:', session.user.email);
+                            document.getElementById('login-btn').style.display = 'none';
+                            document.getElementById('logout-btn').style.display = 'block';
+                        } else {
+                            console.log('[Auth] User logged out or no session');
+                            document.getElementById('login-btn').style.display = 'block';
+                            document.getElementById('logout-btn').style.display = 'none';
+                        }
+                    });
+                }
+            }, 100);
+        </script>
+            <div class="login-container">
+                <h1>Foundry Intelligence Platform</h1>
+                <form id="auth-form">
+                    <input type="email" id="auth-email" placeholder="Email" required>
+                    <input type="password" id="auth-password" placeholder="Password" required>
+                    <button type="button" id="auth-login-btn">Login</button>
+                    <button type="button" id="auth-signup-btn">Sign Up</button>
+                    <div class="auth-divider">OR</div>
+                    <button type="button" id="auth-google-btn" class="oauth-btn google-btn">
+                        <svg width="16" height="16" viewBox="0 0 24 24">
+                            <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                            <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                            <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                            <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                        </svg>
+                        Login with Google
+                    </button>
+                    <p id="auth-error" class="auth-error"></p>
+                </form>
+            </div>
+        </section>
+
+        <!-- ====================== Map view ====================== -->
+        <section class="view view-map active" data-view="map">
+
+            <!-- Map / List sub-tab bar -->
+            <div class="map-subbar" id="map-subbar">
+                <div class="map-subtabs">
+                    <button class="map-subtab active" id="subtab-map" data-subtab="map">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M4 7l2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Map
+                    </button>
+                    <button class="map-subtab" id="subtab-list" data-subtab="list">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M2 7h10M2 10h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                        List
+                    </button>
+                    <button class="map-subtab" id="subtab-targets" data-subtab="targets">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="0.8" fill="currentColor"/></svg>
+                        Targets
+                    </button>
+                </div>
+                <span class="map-subbar-count" id="map-subbar-count"></span>
+                <a class="subbar-methodology-btn nav-btn" href="#" onclick="window.location.href='methodology.html?market='+(window.State?.markets?.current||'gp'); return false;" style="text-decoration:none; color:inherit; cursor:pointer; display:flex; align-items:center;">Methodology</a>
+            </div>
+
+            <!-- Map panel (shown when subtab=map) -->
+            <div class="map-subpanel" id="subpanel-map">
+
+            <!-- Left rail -->
+            <aside class="map-rail" id="map-rail">
+
+                <!-- ── STICKY HEADER ────────────────────────────────── -->
+                <div class="rail-sticky">
+                    <div class="lens-control" id="lens-control">
+                        <button class="lens-seg active" data-lens="composite">Composite</button>
+                        <button class="lens-seg" data-lens="whitespace">Whitespace</button>
+                        <button class="lens-seg" data-lens="seifa">SEIFA</button>
+                        <button class="lens-seg" data-lens="workforce">Workforce</button>
+                        <div class="lens-nra-wrap">
+                            <button class="lens-seg lens-nra-trigger" id="lens-nra-trigger">GP Billings <span class="lens-nra-arrow">▾</span></button>
+                            <div class="lens-nra-menu" id="lens-nra-menu">
+                                <button class="lens-nra-item" data-lens="nra-fees-per-service">Avg fees per service</button>
+                                <button class="lens-nra-item" data-lens="nra-total-fees">Total fees</button>
+                                <button class="lens-nra-item" data-lens="nra-bb">Bulk billing %</button>
+                                <button class="lens-nra-item" data-lens="nra-fee-cagr">3Y fee CAGR</button>
+                                <button class="lens-nra-item" data-lens="nra-bb-cagr">3Y BB% CAGR</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="lens-nra-sublabel" id="lens-nra-sublabel"></div>
+
+                    <div class="global-search-wrap">
+                        <div class="global-search">
+                            <svg class="global-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none">
+                                <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+                                <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                            </svg>
+                            <input type="text" id="global-search-input" class="global-search-input" placeholder="Search SA3, clinic, chain…" autocomplete="off" />
+                            <kbd class="global-search-kbd">⌘K</kbd>
+                            <button id="global-search-clear" class="global-search-clear" style="display:none">✕</button>
+                        </div>
+                        <div class="global-search-results" id="global-search-results"></div>
+                        <!-- Legacy clinic search state hooks (hidden) -->
+                        <div id="clinic-search-results" style="display:none"><div id="clinic-search-results-list"></div></div>
+                        <div id="clinic-search-status" style="display:none"></div>
+                    </div>
+                </div>
+
+                <!-- ── SAVED VIEWS ───────────────────────────────────── -->
+                <div class="rail-section rail-presets-section">
+                    <div class="rail-eyebrow">Saved views <button class="preset-new-btn" id="preset-new-btn">+ New</button></div>
+                    <div class="preset-cards" id="preset-cards"></div>
+                </div>
+
+                <!-- ── ACTIVE FILTER CHIPS ───────────────────────────── -->
+                <div class="filter-chips-strip" id="filter-chips-strip" style="display:none">
+                    <div class="filter-chips-inner" id="filter-chips-inner"></div>
+                    <button class="filter-chips-clear" id="filter-chips-clear">Clear all</button>
+                </div>
+
+                <!-- ── ACCORDION A: Clinics (Major chains + Archetype) ──────── -->
+                <div class="rail-accordion" id="acc-clinics">
+                    <div class="rail-accordion-hdr" onclick="toggleAccordion('clinics')">
+                        <span class="rail-accordion-arrow" id="acc-arrow-clinics">▾</span>
+                        <span class="rail-accordion-title">Clinics</span>
+                    </div>
+                    <div class="rail-accordion-body" id="acc-body-clinics">
+
+                        <!-- Major chains section -->
+                        <div class="acc-row">
+                            <div class="rail-eyebrow">Major chains <button class="acc-reset-link hidden" id="clinic-chains-reset">Reset</button></div>
+                            <div class="clinic-chains-grid" id="clinic-chains-grid"></div>
+                        </div>
+
+                        <!-- Archetype section -->
+                        <div class="acc-row" id="archetype-filter-section">
+                            <div class="rail-eyebrow" title="AND logic across dimensions — none selected = all shown">Archetype <button class="acc-reset-link" id="archetype-reset" style="display:none">Reset</button></div>
+                            <div id="archetype-content">
+                                <div class="acc-sublabel">Format</div>
+                                <div class="mmm-chip-grid archetype-chip-grid">
+                                    <label class="mmm-chip-label" title="Big-box: GP count ≥6"><input type="checkbox" class="archetype-chip" data-dim="format" value="Big-box"><span>Big-box</span></label>
+                                    <label class="mmm-chip-label" title="Mid-format: GP count 3–5"><input type="checkbox" class="archetype-chip" data-dim="format" value="Mid-format"><span>Mid</span></label>
+                                    <label class="mmm-chip-label" title="Small: GP count 1–2"><input type="checkbox" class="archetype-chip" data-dim="format" value="Small"><span>Small</span></label>
+                                </div>
+                                <div class="acc-sublabel" style="margin-top:6px">Billing model</div>
+                                <div class="mmm-chip-grid archetype-chip-grid">
+                                    <label class="mmm-chip-label billing-bulk"><input type="checkbox" class="archetype-chip" data-dim="billing" value="Bulk"><span>Bulk</span></label>
+                                    <label class="mmm-chip-label billing-mixed"><input type="checkbox" class="archetype-chip" data-dim="billing" value="Mixed"><span>Mixed</span></label>
+                                    <label class="mmm-chip-label billing-private"><input type="checkbox" class="archetype-chip" data-dim="billing" value="Private"><span>Private</span></label>
+                                </div>
+                                <div class="acc-sublabel" style="margin-top:6px">Ownership</div>
+                                <div class="mmm-chip-grid archetype-chip-grid">
+                                    <label class="mmm-chip-label" title="Recognised corporate brand"><input type="checkbox" class="archetype-chip" data-dim="ownership" value="Corporate"><span>Corp.</span></label>
+                                    <label class="mmm-chip-label" title="Independent operator"><input type="checkbox" class="archetype-chip" data-dim="ownership" value="Independent"><span>Indep.</span></label>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- ── ACCORDION B: Geographic Stratification ──────────────── -->
+                <div class="rail-accordion" id="acc-filter">
+                    <div class="rail-accordion-hdr" onclick="toggleAccordion('filter')">
+                        <span class="rail-accordion-arrow" id="acc-arrow-filter">▸</span>
+                        <span class="rail-accordion-title">Geographic stratification</span>
+                    </div>
+                    <div class="rail-accordion-body collapsed" id="acc-body-filter">
+
+                        <div class="acc-row">
+                            <div class="rail-eyebrow">State / Territory</div>
+                            <select class="field-select" id="state-filter">
+                                <option value="">All Australia</option>
+                                <option value="New South Wales">New South Wales</option>
+                                <option value="Victoria">Victoria</option>
+                                <option value="Queensland">Queensland</option>
+                                <option value="Western Australia">Western Australia</option>
+                                <option value="South Australia">South Australia</option>
+                                <option value="Tasmania">Tasmania</option>
+                                <option value="Australian Capital Territory">ACT</option>
+                                <option value="Northern Territory">Northern Territory</option>
+                            </select>
+                        </div>
+
+                        <div class="acc-row" id="ses-remoteness-section">
+                            <div class="rail-eyebrow" title="SEIFA IRSAD socioeconomic index (1–10) combined with MMM remoteness class (1–7). AND logic — none selected = all shown.">Remoteness</div>
+                            <div class="acc-sublabel">SEIFA IRSAD decile</div>
+                            <div class="seifa-chip-grid" id="seifa-chip-grid">
+                                <label class="seifa-chip-label" title="Decile 1 — most disadvantaged"><input type="checkbox" class="seifa-chip" value="1"><span>1</span></label>
+                                <label class="seifa-chip-label" title="Decile 2"><input type="checkbox" class="seifa-chip" value="2"><span>2</span></label>
+                                <label class="seifa-chip-label" title="Decile 3"><input type="checkbox" class="seifa-chip" value="3"><span>3</span></label>
+                                <label class="seifa-chip-label" title="Decile 4"><input type="checkbox" class="seifa-chip" value="4"><span>4</span></label>
+                                <label class="seifa-chip-label" title="Decile 5"><input type="checkbox" class="seifa-chip" value="5"><span>5</span></label>
+                                <label class="seifa-chip-label" title="Decile 6"><input type="checkbox" class="seifa-chip" value="6"><span>6</span></label>
+                                <label class="seifa-chip-label" title="Decile 7"><input type="checkbox" class="seifa-chip" value="7"><span>7</span></label>
+                                <label class="seifa-chip-label" title="Decile 8"><input type="checkbox" class="seifa-chip" value="8"><span>8</span></label>
+                                <label class="seifa-chip-label" title="Decile 9"><input type="checkbox" class="seifa-chip" value="9"><span>9</span></label>
+                                <label class="seifa-chip-label" title="Decile 10 — most advantaged"><input type="checkbox" class="seifa-chip" value="10"><span>10</span></label>
+                            </div>
+                            <div class="acc-sublabel" style="margin-top:8px">MMM class</div>
+                            <div class="mmm-chip-grid">
+                                <label class="mmm-chip-label" title="MM1 · Major cities"><input type="checkbox" class="mmm-chip" value="1"><span>1</span></label>
+                                <label class="mmm-chip-label" title="MM2 · Inner regional"><input type="checkbox" class="mmm-chip" value="2"><span>2</span></label>
+                                <label class="mmm-chip-label" title="MM3 · Large rural"><input type="checkbox" class="mmm-chip" value="3"><span>3</span></label>
+                                <label class="mmm-chip-label" title="MM4 · Medium rural"><input type="checkbox" class="mmm-chip" value="4"><span>4</span></label>
+                                <label class="mmm-chip-label" title="MM5 · Small rural"><input type="checkbox" class="mmm-chip" value="5"><span>5</span></label>
+                                <label class="mmm-chip-label" title="MM6 · Remote"><input type="checkbox" class="mmm-chip" value="6"><span>6</span></label>
+                                <label class="mmm-chip-label" title="MM7 · Very remote"><input type="checkbox" class="mmm-chip" value="7"><span>7</span></label>
+                            </div>
+                            <div class="acc-hint">SEIFA: 1=disadvantaged, 10=advantaged · selecting any decile auto-switches lens to SEIFA</div>
+                        </div>
+
+                        <div class="acc-row" id="workforce-section">
+                            <div class="rail-eyebrow" title="DPA flags from DoctorConnect 2020 spatial intersection. Workforce risk: composite of supply density, age profile, and DPA status.">Workforce flags</div>
+                            <div class="dpa-chip-grid">
+                                <label class="mmm-chip-label"><input type="checkbox" id="dpa-bonded"><span>DPA Bonded</span></label>
+                                <label class="mmm-chip-label"><input type="checkbox" id="dpa-gp-img"><span>DPA GP/IMG</span></label>
+                            </div>
+                            <div class="field-label-row" style="margin-top:10px">
+                                <label class="field-label">Min workforce risk</label>
+                                <span class="field-readout num" id="workforce-risk-readout">0</span>
+                            </div>
+                            <input type="range" class="seifa-slider" id="workforce-risk-slider" min="0" max="100" step="5" value="0" style="width:100%" />
+                        </div>
+
+                        <div class="acc-row">
+                            <button class="acc-link" id="data-quality-toggle">Data-quality filters ▸</button>
+                            <div class="data-quality-sub" id="data-quality-sub" style="display:none">
+                                <div class="mmm-chip-grid archetype-chip-grid" style="grid-template-columns:1fr 1fr;margin-top:6px">
+                                    <label class="mmm-chip-label" title="Has website URL"><input type="checkbox" class="clinic-data-filter" data-filter="has_website"><span>Website</span></label>
+                                    <label class="mmm-chip-label" title="GP headcount available"><input type="checkbox" class="clinic-data-filter" data-filter="has_gp_data"><span>GP headcount</span></label>
+                                </div>
+                            </div>
+                            <div class="acc-footer-row">
+                                <button class="acc-reset-danger" id="filter-reset-all">Reset all filters</button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- ── ACCORDION C: Adjust thesis ────────────────────── -->
+                <div class="rail-accordion" id="acc-thesis">
+                    <div class="rail-accordion-hdr" onclick="toggleAccordion('thesis')">
+                        <span class="rail-accordion-arrow" id="acc-arrow-thesis">▸</span>
+                        <span class="rail-accordion-title">Adjust thesis</span>
+                        <span class="thesis-badge" id="thesis-badge" style="display:none">custom</span>
+                    </div>
+                    <div class="rail-accordion-body collapsed" id="acc-body-thesis">
+                        <div class="thesis-banner">
+                            Composite weights — base case shown muted; drag to stress-test alternates.
+                        </div>
+                        <div class="weights-list" id="methodology-weights-section">
+                            <div class="weight-row">
+                                <div class="weight-row-top">
+                                    <span class="weight-row-label">Demand <span class="weight-row-hint">Population · Growth · Age 65+</span></span>
+                                    <span class="weight-row-readout"><span id="weight-value-demand">30%</span><span class="weight-delta" id="weight-delta-demand"></span></span>
+                                </div>
+                                <div class="weight-bar-wrap">
+                                    <div class="weight-bar-base" id="weight-base-demand" style="width:30%"></div>
+                                    <input type="range" class="weight-slider" id="weight-slider-demand" min="5" max="60" step="1" value="30" />
+                                </div>
+                            </div>
+                            <div class="weight-row">
+                                <div class="weight-row-top">
+                                    <span class="weight-row-label">Supply <span class="weight-row-hint">Clinic count · Density</span></span>
+                                    <span class="weight-row-readout"><span id="weight-value-supply">35%</span><span class="weight-delta" id="weight-delta-supply"></span></span>
+                                </div>
+                                <div class="weight-bar-wrap">
+                                    <div class="weight-bar-base" id="weight-base-supply" style="width:35%"></div>
+                                    <input type="range" class="weight-slider" id="weight-slider-supply" min="5" max="60" step="1" value="35" />
+                                </div>
+                            </div>
+                            <div class="weight-row">
+                                <div class="weight-row-top">
+                                    <span class="weight-row-label">Competition <span class="weight-row-hint">Ownership mix</span></span>
+                                    <span class="weight-row-readout"><span id="weight-value-competition">20%</span><span class="weight-delta" id="weight-delta-competition"></span></span>
+                                </div>
+                                <div class="weight-bar-wrap">
+                                    <div class="weight-bar-base" id="weight-base-competition" style="width:20%"></div>
+                                    <input type="range" class="weight-slider" id="weight-slider-competition" min="5" max="60" step="1" value="20" />
+                                </div>
+                            </div>
+                            <div class="weight-row">
+                                <div class="weight-row-top">
+                                    <span class="weight-row-label">Economics <span class="weight-row-hint">Income · Remoteness</span></span>
+                                    <span class="weight-row-readout"><span id="weight-value-economics">15%</span><span class="weight-delta" id="weight-delta-economics"></span></span>
+                                </div>
+                                <div class="weight-bar-wrap">
+                                    <div class="weight-bar-base" id="weight-base-economics" style="width:15%"></div>
+                                    <input type="range" class="weight-slider" id="weight-slider-economics" min="5" max="60" step="1" value="15" />
+                                </div>
+                            </div>
+                        </div>
+                        <div class="acc-sublabel" style="padding:4px 16px 2px">Workforce risk weighting</div>
+                        <div class="weights-list">
+                            <div class="weight-row">
+                                <div class="weight-row-top"><span class="weight-row-label">Supply</span><span id="wf-weight-value-supply">40%</span></div>
+                                <input type="range" class="weight-slider" id="wf-weight-slider-supply" min="0" max="100" step="1" value="40" />
+                            </div>
+                            <div class="weight-row">
+                                <div class="weight-row-top"><span class="weight-row-label">Age</span><span id="wf-weight-value-age">30%</span></div>
+                                <input type="range" class="weight-slider" id="wf-weight-slider-age" min="0" max="100" step="1" value="30" />
+                            </div>
+                            <div class="weight-row">
+                                <div class="weight-row-top"><span class="weight-row-label">DPA</span><span id="wf-weight-value-dpa">30%</span></div>
+                                <input type="range" class="weight-slider" id="wf-weight-slider-dpa" min="0" max="100" step="1" value="30" />
+                            </div>
+                        </div>
+                        <div style="padding:8px 16px 10px">
+                            <button class="acc-reset-link hidden" id="weights-reset">Reset to base case</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Legend Display ──────────────────────────── -->
+                <div id="acc-display" class="legend-display">
+                    <div id="acc-body-display" class="legend-display-body">
+                        <div class="acc-row">
+                            <div class="rail-eyebrow" id="legend-title">Composite tier ramp</div>
+                            <div class="tier-legend" id="legend-content"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── FOOTER ──────────────────────────────────────────── -->
+                <div class="rail-footer-bar">
+                    <span>Data vintage · Mar 2025</span>
+                </div>
+
+            </aside>
+
+
+            <!-- Map container -->
+            <div class="map-container">
+                <div id="map"></div>
+
+                <div class="weight-warning" id="weight-warning">
+                    Custom weighting active — results differ from base case
+                </div>
+
+                <div class="map-tooltip" id="map-tooltip"></div>
+
+                <!-- Detail drawer -->
+                <aside class="detail-drawer" id="detail-drawer">
+                    <div id="drawer-body"></div>
+                </aside>
+
+                <!-- Target Overview drawer (F-02) -->
+                <aside class="detail-drawer target-overview-drawer hidden" id="target-overview-drawer">
+                    <div id="target-overview-body"></div>
+                </aside>
+
+                <!-- Sheet backdrop (mobile only) -->
+                <div class="sheet-backdrop" id="sheet-backdrop"></div>
+
+                <!-- Comparison panel (catchment side-by-side) -->
+                <div class="comparison-panel hidden" id="comparison-panel"></div>
+
+                <!-- Mobile controls FAB -->
+                <button class="fab" id="fab-controls" aria-label="Open controls">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path d="M2 4h10M2 7h10M2 10h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    </svg>
+                    Controls
+                </button>
+            </div>
+
+            </div><!-- /subpanel-map -->
+
+            <!-- List panel (shown when subtab=list) — full rankings UI -->
+            <div class="map-subpanel" id="subpanel-list" style="display:none; flex:1; overflow:hidden; flex-direction:column;">
+
+                <div class="rankings-band">
+                    <div class="band-cell">
+                        <div class="band-cell-label">Regions</div>
+                        <div class="band-cell-value" id="band-regions">—</div>
+                        <div class="band-cell-sub">In current filter</div>
+                    </div>
+                    <div class="band-cell band-cell-tier-1">
+                        <div class="band-cell-label">Tier 1 regions</div>
+                        <div class="band-cell-value" id="band-tier1">—</div>
+                        <div class="band-cell-sub">Composite ≥ 85</div>
+                    </div>
+                    <div class="band-cell band-cell-tier-2">
+                        <div class="band-cell-label">Tier 2 regions</div>
+                        <div class="band-cell-value" id="band-tier2">—</div>
+                        <div class="band-cell-sub">Composite 70–84</div>
+                    </div>
+                    <div class="band-cell">
+                        <div class="band-cell-label" style="display:flex;align-items:center;gap:6px">
+                            <span>Independent clinics</span>
+                            <span class="info-tip" data-tip="Directional only. Ownership classification is Foundry's internal tagging — clinics without a recognisable corporate brand are labelled 'Independent' by default. Some will be corporately owned via unbranded vehicles. Validate before deployment.">i</span>
+                        </div>
+                        <div class="band-cell-value" id="band-acquirable">—</div>
+                        <div class="band-cell-sub" style="color:var(--warning)">Directional estimate · upper bound</div>
+                    </div>
+                </div>
+
+                <div class="rankings-controls">
+                    <div class="rankings-view-bar">
+                        <span class="rankings-view-label">Columns</span>
+                        <div class="chip-group chip-group-table-view">
+                            <button class="chip active" data-table-view="composite">Composite</button>
+                            <button class="chip" data-table-view="nra">GP Billings</button>
+                            <button class="chip" data-table-view="archetypes">Archetypes</button>
+                            <button class="chip" data-table-view="targets">Targets</button>
+                            <button class="chip" data-table-view="all">All</button>
+                        </div>
+                    </div>
+                    <input type="text" class="search-input" id="rankings-search" placeholder="Search region or state" />
+                    <div class="chip-group chip-group-state">
+                        <button class="chip active" data-state="">All states</button>
+                        <button class="chip" data-state="New South Wales">NSW</button>
+                        <button class="chip" data-state="Victoria">VIC</button>
+                        <button class="chip" data-state="Queensland">QLD</button>
+                        <button class="chip" data-state="Western Australia">WA</button>
+                        <button class="chip" data-state="South Australia">SA</button>
+                        <button class="chip" data-state="Tasmania">TAS</button>
+                    </div>
+                    <div class="chip-group chip-group-tier">
+                        <button class="chip active" data-tier="">All tiers</button>
+                        <button class="chip" data-tier="1">T1</button>
+                        <button class="chip" data-tier="2">T2</button>
+                        <button class="chip" data-tier="3">T3</button>
+                        <button class="chip" data-tier="4">T4</button>
+                        <button class="chip" data-tier="5">T5</button>
+                    </div>
+                    <span class="rankings-count" id="rankings-count">—</span>
+                </div>
+
+                <div class="rankings-wrap">
+                    <table class="rankings-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th class="sortable" data-key="name">Region</th>
+                                <th class="sortable num-col composite-col" data-key="demand">Demand</th>
+                                <th class="sortable num-col composite-col" data-key="supply">Supply</th>
+                                <th class="sortable num-col composite-col" data-key="competition">Competition</th>
+                                <th class="sortable num-col composite-col" data-key="economics">Economics</th>
+                                <th class="sortable num-col sort-desc" data-key="composite">Composite</th>
+                                <th class="sortable" data-key="tier">Tier</th>
+                                <th class="sortable num-col" data-key="clinics">Clinics</th>
+                                <th class="sortable num-col" data-key="acquirable" title="Count of independently-owned practices in this SA3">Independent</th>
+                                <th class="sortable num-col nra-col" data-key="nraFeesPerService">Fees/Svc†</th>
+                                <th class="sortable num-col nra-col" data-key="nraTotalFees">Total Fees†</th>
+                                <th class="sortable num-col nra-col" data-key="nraBBRate">Bulk Bill %†</th>
+                                <th class="sortable num-col nra-col" data-key="nraFeeCagr">Fee 3Y CAGR†</th>
+                                <th class="sortable num-col nra-col" data-key="nraBbCagr">BB% 3Y CAGR†</th>
+                                <th class="sortable num-col archetype-col" data-key="fmtBigbox">Big-box %‡</th>
+                                <th class="sortable num-col archetype-col" data-key="billBulk">Bulk %‡</th>
+                                <th class="sortable num-col archetype-col" data-key="ownIndep">Indep %‡</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rankings-tbody"></tbody>
+                    </table>
+                </div>
+
+            </div>
+
+            <!-- Targets panel (shown when subtab=targets) -->
+            <div class="map-subpanel" id="subpanel-targets" style="display:none; flex:1; overflow:hidden; flex-direction:column; overflow-y:auto;">
+
+                <!-- Strip: scope + export shortlist -->
+                <div class="tp-strip">
+                    <div class="tp-strip-left">
+                        <span class="tp-strip-label">SCOPE</span>
+                        <select id="tp-scope-state" class="tp-select">
+                            <option value="">National</option>
+                            <option value="NSW">NSW</option>
+                            <option value="VIC">VIC</option>
+                            <option value="QLD">QLD</option>
+                            <option value="WA">WA</option>
+                            <option value="SA">SA</option>
+                            <option value="TAS">TAS</option>
+                        </select>
+                    </div>
+                    <div class="tp-strip-right">
+                        <button class="tp-btn-ghost" id="tp-export-shortlist">⇩ Export shortlist</button>
+                    </div>
+                </div>
+
+                <!-- HERO: Priority ranked list -->
+                <section class="tp-hero">
+                    <div class="tp-hero-head">
+                        <div>
+                            <div class="tp-eyebrow">PRIORITY TARGETS · RANKED BY ACQUISITION ATTRACTIVENESS</div>
+                            <h2 class="tp-hero-title" id="tp-hero-title">Platform acquisitions</h2>
+                            <p class="tp-hero-sub" id="tp-hero-sub">Ranked by Target Score — a weighted composite of Deliverability, Asset quality, Platform potential and Strategic fit.</p>
+                        </div>
+                        <div class="tp-mode-toggle">
+                            <span class="tp-mode-label">I'm looking for</span>
+                            <div class="tp-toggle-group">
+                                <button class="tp-toggle active" data-mode="platform">A platform</button>
+                                <button class="tp-toggle" data-mode="bolton">Bolt-ons</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tp-key">
+                        <div class="tp-key-chips">
+                            <span class="tp-key-chip" style="background:#465E4D">Deliverability</span>
+                            <span class="tp-key-chip" style="background:#6E9277">Asset quality</span>
+                            <span class="tp-key-chip" style="background:#97C777;color:#000">Platform potential</span>
+                            <span class="tp-key-chip" style="background:#C5E0B3;color:#000">Strategic fit</span>
+                        </div>
+                        <span class="tp-key-note">← Target Score = weighted sum of these four</span>
+                    </div>
+                    <div class="tp-list" id="tp-list"></div>
+                </section>
+
+                <!-- WEIGHTING CONTROL -->
+                <section class="tp-weights">
+                    <div class="tp-weights-head">
+                        <div class="tp-weights-title">TARGET SCORE = WEIGHTED SUM OF 4 DIMENSIONS</div>
+                        <button class="tp-btn-ghost" id="tp-reset-weights">Reset to Foundry base</button>
+                    </div>
+                    <div class="tp-dims" id="tp-dims"></div>
+                </section>
+
+            </div><!-- /subpanel-targets -->
+
+        </section>
+
+        <!-- ====================== Methodology view ====================== -->
+        <section class="view view-methodology" data-view="methodology">
+            <article class="method-article">
+                <div class="page-eyebrow">
+                    <span class="page-eyebrow-bar"></span>
+                    Methodology
+                </div>
+                <h1 class="page-title">How we score Australian primary care markets</h1>
+                <p class="lead">Methodology is organised into two layers: <strong>regional-level scores</strong> (SA3 geographic units) and <strong>clinic-level metrics</strong> (individual practice locations). All are transparent by design, fully reproducible from public sources, and open to adjustment. This page documents each score's sub-drivers, word equations, and default parameterisation.</p>
+
+                <!-- ══════════════════════════════════════════════════════════════
+                     PART 1: REGIONAL ANALYSIS
+                     ══════════════════════════════════════════════════════════════ -->
+                <h2 style="margin-top: 48px; padding-top: 24px; border-top: 2px solid #ddd;">Part 1: Regional Analysis (SA3 Level)</h2>
+                <p>Three synthetic scores characterise every SA3 region: the Composite Score, Workforce Risk Score, and Whitespace Score. Each is fully adjustable via the map interface to stress-test alternate investment theses.</p>
+
+                <!-- ── Regional Score 1: Composite ──────────────────────────────── -->
+                <h3>Composite Score <span class="method-range">0 – 100</span></h3>
+                <p>The headline investment-attractiveness score. Each SA3 receives four sub-scores (each independently normalised to 0–100), then combined into a weighted average. Higher is more attractive as a consolidation target. Default weights reflect Foundry's base-case methodology; adjust them in the map rail to stress-test alternate theses.</p>
+
+                <div class="method-formula">
+                    <div class="method-formula-label">Word equation</div>
+                    <div class="method-formula-body">
+                        Composite = (<span class="fw">30%</span> × Demand) + (<span class="fw">35%</span> × Supply) + (<span class="fw">20%</span> × Competition) + (<span class="fw">15%</span> × Economics)
+                    </div>
+                </div>
+
+                <div class="method-pillars">
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">01</div>
+                        <div class="method-pillar-title">Demand</div>
+                        <div class="method-pillar-weight">Default contribution · 30%</div>
+                        <div class="method-pillar-body">Captures the volume and trajectory of healthcare demand. Regions with more people, faster population growth, and a higher share of seniors (who consume GP services at roughly 2× the average rate) score higher.</div>
+                        <div class="method-pillar-equation">
+                            Demand score ∝ Population<sub>2025</sub> + Annual growth rate + % aged 65+
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Population (2025)</strong> — ABS estimated residents, SA3 level</span>
+                            <span class="method-var"><strong>Annual growth rate</strong> — population CAGR over trailing 5 years</span>
+                            <span class="method-var"><strong>% aged 65+</strong> — share of population in highest-utilisation cohort</span>
+                        </div>
+                        <div class="method-pillar-direction">All three sub-drivers are positively weighted — higher values push the score up.</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">02</div>
+                        <div class="method-pillar-title">Supply</div>
+                        <div class="method-pillar-weight">Default contribution · 35%</div>
+                        <div class="method-pillar-body">Measures existing GP clinic capacity relative to population size. Regions with fewer clinics per capita score higher — thin supply signals undersupply, lower competitive intensity, and greater pricing power for a consolidating operator.</div>
+                        <div class="method-pillar-equation">
+                            Supply score ∝ 1 ÷ (Clinics per 10,000 residents)
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Clinic count</strong> — total GP practice locations within SA3 boundary</span>
+                            <span class="method-var"><strong>Clinics per 10,000 residents</strong> — normalised density; lower → higher score</span>
+                        </div>
+                        <div class="method-pillar-direction">Inversely weighted — fewer clinics per capita produces a higher Supply score.</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">03</div>
+                        <div class="method-pillar-title">Competition</div>
+                        <div class="method-pillar-weight">Default contribution · 20%</div>
+                        <div class="method-pillar-body">Indexes the consolidation runway available. Markets dominated by independent practices offer more fragmented ownership and greater room to consolidate; markets already heavily concentrated by corporate operators have less runway for an incoming platform.</div>
+                        <div class="method-pillar-equation">
+                            Competition score ∝ % Independent practices
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>% Independent</strong> — share of clinics not affiliated with a recognised corporate group (positively weighted)</span>
+                            <span class="method-var"><strong>% Corporate</strong> — share operated by named groups e.g. ForHealth, Healius, IPN (negatively weighted)</span>
+                            <span class="method-var"><strong>% Public / Non-profit</strong> — out-of-scope for private consolidation; not penalised but not rewarded</span>
+                        </div>
+                        <div class="method-pillar-direction">Higher independent share → higher Competition score.</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">04</div>
+                        <div class="method-pillar-title">Economics</div>
+                        <div class="method-pillar-weight">Default contribution · 15%</div>
+                        <div class="method-pillar-body">Proxies the unit economics of running a practice in each region. Higher incomes support private billing and mixed billing revenue; the MMM classification incorporates rurality-linked cost and staffing dynamics.</div>
+                        <div class="method-pillar-equation">
+                            Economics score ∝ Median household income + MMM-adjusted attractiveness
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Median household income</strong> — ABS 2023 survey; higher income → higher billings potential</span>
+                            <span class="method-var"><strong>MMM classification</strong> — Modified Monash Model class 1–7; lower (metro) classes treated as more economically attractive for consolidation</span>
+                        </div>
+                        <div class="method-pillar-direction">Positively weighted — wealthier, more accessible regions score higher on Economics.</div>
+                    </div>
+                </div>
+
+                <h3>Tier assignment</h3>
+                <p>Composite scores are bucketed into five absolute tiers. Tiers hold their meaning when weights are adjusted — a Tier 2 region under one thesis is directly comparable to a Tier 2 region under another.</p>
+                <div class="method-tier-table">
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#465E4D"></span><strong>Tier 1</strong><span class="method-tier-range">85–100</span><span class="method-tier-desc">Exceptional — top-decile market, strong consolidation thesis</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#6E9277"></span><strong>Tier 2</strong><span class="method-tier-range">70–84</span><span class="method-tier-desc">Strong — high-conviction region with multiple targets</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#97C777"></span><strong>Tier 3</strong><span class="method-tier-range">55–69</span><span class="method-tier-desc">Moderate — selectively attractive; thesis-dependent</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#FFC000"></span><strong>Tier 4</strong><span class="method-tier-range">40–54</span><span class="method-tier-desc">Weak — below-median fundamentals; deprioritise unless distressed</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#C00000"></span><strong>Tier 5</strong><span class="method-tier-range">0–39</span><span class="method-tier-desc">Poor — low priority under base-case methodology</span></div>
+                </div>
+
+                <!-- ── Regional Score 2: Workforce Risk ────────────────────── -->
+                <h3>Workforce Risk Score <span class="method-range">0 – 100</span></h3>
+                <p>A supply-side stress indicator. Higher scores flag SA3s where GP workforce constraints are most acute — either because the region is GP-sparse, has an ageing GP population approaching retirement, sits inside a government-designated area of GP need, or all three. The score is independent of the Composite and can be weighted separately.</p>
+
+                <div class="method-formula">
+                    <div class="method-formula-label">Word equation</div>
+                    <div class="method-formula-body">
+                        Workforce Risk = (<span class="fw">40%</span> × Supply density risk) + (<span class="fw">30%</span> × Age cohort risk) + (<span class="fw">30%</span> × DPA score)
+                    </div>
+                </div>
+
+                <div class="method-pillars">
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">A</div>
+                        <div class="method-pillar-title">Supply density risk</div>
+                        <div class="method-pillar-weight">Default contribution · 40%</div>
+                        <div class="method-pillar-body">Lower GP FTE per capita → higher risk. The SA3's dominant MMM class (from F-06) is used to look up the national HWD benchmark for that remoteness class. Normalised across the full 7-class MMM range so that the most GP-sparse class (MM6, 6.76 FTE/10k) scores 100 and the most GP-dense (MM3, 13.47 FTE/10k) scores 0.</div>
+                        <div class="method-pillar-equation">
+                            Supply risk = (FTE<sub>max</sub> − FTE<sub>MMM class</sub>) ÷ (FTE<sub>max</sub> − FTE<sub>min</sub>) × 100
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>GP FTE per 10,000 pop.</strong> — HWD 2025, imputed from SA3's MMM_Dominant class. Not an SA3-specific count — a class-level benchmark.</span>
+                            <span class="method-var"><strong>MMM range (2025)</strong> — Min 6.76 (MM6 · Remote) → Max 13.47 (MM3 · Large rural). Note: MM3 outperforms MM1 metro (11.21) due to rural health workforce policy incentives.</span>
+                        </div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">B</div>
+                        <div class="method-pillar-title">Age cohort risk</div>
+                        <div class="method-pillar-weight">Default contribution · 30%</div>
+                        <div class="method-pillar-body">A higher share of GPs aged 55+ signals near-term retirement pressure and pipeline vulnerability. Same MMM-class imputation as above. Normalised so the class with the highest % ≥55 (MM1 metro at 41.8%) scores 100 and the lowest (MM2 regional cities at 26.6%) scores 0.</div>
+                        <div class="method-pillar-equation">
+                            Age risk = (Pct55<sub>MMM class</sub> − Pct55<sub>min</sub>) ÷ (Pct55<sub>max</sub> − Pct55<sub>min</sub>) × 100
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>% GP workforce aged ≥55</strong> — HWD 2025 (55–64 GPFTE + 65+ GPFTE) ÷ total GPFTE, by MMM class</span>
+                            <span class="method-var"><strong>Class range (2025)</strong> — Min 26.6% (MM2) → Max 41.8% (MM1). Metro areas carry the highest retirement risk cohort nationally.</span>
+                        </div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">C</div>
+                        <div class="method-pillar-title">DPA flag score</div>
+                        <div class="method-pillar-weight">Default contribution · 30%</div>
+                        <div class="method-pillar-body">A binary step function. If an SA3's boundary intersects a government-declared Designated Provider of Area polygon, it is flagged under one or both DPA programs. Each program reflects a distinct government finding that the area is underserved by GPs.</div>
+                        <div class="method-pillar-equation">
+                            DPA score = 100 if both flags · 50 if one flag · 0 if neither
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>DPA Bonded</strong> — area designated under the Bonded Medical Program. Doctors on bonded scholarships must serve here; indicates chronic underservice.</span>
+                            <span class="method-var"><strong>DPA GP/IMG</strong> — area designated under the s19AB restriction (General Practice / International Medical Graduates). IMGs can only access MBS in these areas; indicates persistent workforce gaps.</span>
+                            <span class="method-var"><strong>Source</strong> — DoctorConnect catchment shapefiles, 2020 vintage, EPSG:4283. Spatial intersection at SA3 polygon level.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="method-formula" style="margin-top:0">
+                    <div class="method-formula-label">Worked example — Alice Springs (MMM 6)</div>
+                    <div class="method-formula-body" style="font-size:12px;line-height:1.8">
+                        FTE/10k = 6.76 → Supply risk = (13.47 − 6.76) ÷ (13.47 − 6.76) × 100 = <strong>100</strong><br>
+                        % ≥55 = 33.8% → Age risk = (33.8 − 26.6) ÷ (41.8 − 26.6) × 100 = <strong>47</strong><br>
+                        Both DPA flags → DPA score = <strong>100</strong><br>
+                        Workforce Risk = 0.40 × 100 + 0.30 × 47 + 0.30 × 100 = <strong>84</strong>
+                    </div>
+                </div>
+
+                <!-- ── Regional Score 3: Whitespace ────────────────────────── -->
+                <h3>Whitespace Score <span class="method-range">0 – 100</span></h3>
+                <p>A binary-signal composite that identifies "whitespace" markets — regions where multiple structural tailwinds align for a new entrant or consolidator. Unlike the Composite Score, which rewards high attractiveness, the Whitespace Score specifically rewards regions where the incumbent landscape is weak and the case for entry is structural rather than financial. Each of four independent binary signals contributes 25 points.</p>
+
+                <div class="method-formula">
+                    <div class="method-formula-label">Word equation</div>
+                    <div class="method-formula-body">
+                        Whitespace = 25 × [Economics ≤ 50] + 25 × [Corporate share &lt; 30%] + 25 × [Demand ≥ 60] + 25 × [Workforce Risk ≥ 60]
+                    </div>
+                </div>
+
+                <div class="method-pillars">
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">+25</div>
+                        <div class="method-pillar-title">Low economic attractiveness</div>
+                        <div class="method-pillar-body">Economics Score ≤ 50. Markets with below-median household incomes and remote MMM classifications are less attractive to corporates deploying capital under a private-billing thesis. This leaves a structural gap that a mission-aligned or bulk-billing operator can exploit.</div>
+                        <div class="method-pillar-equation">Signal fires when: Economics Score ≤ 50</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">+25</div>
+                        <div class="method-pillar-title">Low corporate penetration</div>
+                        <div class="method-pillar-body">Corporate share &lt; 30%. The market has not yet been consolidated by large GP operators. A low corporate share suggests the region has been passed over or is in the earliest stages of roll-up — both are entry opportunities.</div>
+                        <div class="method-pillar-equation">Signal fires when: Corporate share &lt; 30% of total clinics</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">+25</div>
+                        <div class="method-pillar-title">High demand pressure</div>
+                        <div class="method-pillar-body">Demand Score ≥ 60. Significant population size, growth trajectory, or senior cohort ensures that a new entrant enters into a market with structural demand — not one that requires demand creation.</div>
+                        <div class="method-pillar-equation">Signal fires when: Demand Score ≥ 60</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">+25</div>
+                        <div class="method-pillar-title">Elevated workforce stress</div>
+                        <div class="method-pillar-body">Workforce Risk Score ≥ 60. GP retirement pressure and/or DPA designation create service gaps that require new supply. An entrant filling this gap may benefit from government incentive programs (bulk billing incentives, rural loading, locum support) unavailable in lower-risk markets.</div>
+                        <div class="method-pillar-equation">Signal fires when: Workforce Risk Score ≥ 60</div>
+                    </div>
+                </div>
+
+                <div class="method-tier-table" style="margin-top:0">
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#465E4D"></span><strong>100</strong><span class="method-tier-range">All 4 signals</span><span class="method-tier-desc">Very high whitespace — all structural tailwinds present simultaneously</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#6E9277"></span><strong>75</strong><span class="method-tier-range">3 of 4 signals</span><span class="method-tier-desc">High whitespace — strong structural case for entry</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#97C777"></span><strong>50</strong><span class="method-tier-range">2 of 4 signals</span><span class="method-tier-desc">Medium whitespace — mixed signals; thesis-dependent</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#C5E0B3"></span><strong>25</strong><span class="method-tier-range">1 of 4 signals</span><span class="method-tier-desc">Low whitespace — isolated signal only</span></div>
+                    <div class="method-tier-row"><span class="method-tier-dot" style="background:#E8EFE9"></span><strong>0</strong><span class="method-tier-range">0 signals</span><span class="method-tier-desc">No whitespace — market does not exhibit structural entry tailwinds</span></div>
+                </div>
+
+                <!-- ── Regional Score 4: GP Billings ────────────────────────── -->
+                <h3>GP Billing Metrics <span class="method-range">SA3 level</span></h3>
+                <p>The five GP Billings map views surface Medicare Non-Referred Attendances (GP consults billed under MBS) at the SA3 level, using a <strong>rolling 4-quarter window ending Dec 2025</strong>. These are market-sizing and billing-mix metrics — not synthetic scores. They describe how much revenue is flowing through each SA3's GP sector, how price-sensitive patients are (bulk-billing %), and how fast both are growing.</p>
+                <p style="color:#1b5e20;background:#e8f5e9;padding:8px 12px;border-radius:6px;font-size:13px;margin:10px 0 14px"><strong>Coverage:</strong> 335 of 336 SA3s have NRA data. Only Lord Howe Island is excluded (MBS statistically suppressed due to very low service volumes).</p>
+
+                <div class="method-equation" style="margin-bottom:16px">
+                    <strong>Fees per Service</strong> = Total Fee Charged ($) ÷ Total Service Count<br>
+                    <strong>Bulk Billing %</strong> = Bulk-Billed Services ÷ Total Services × 100<br>
+                    <strong>3-Year Fee CAGR</strong> = (Rolling 4Q Fees ÷ Same 4Q 3 years prior)<sup>1/3</sup> − 1<br>
+                    <strong>3-Year BB% CAGR</strong> = (Current BB% ÷ Prior BB%)<sup>1/3</sup> − 1
+                </div>
+
+                <div class="method-pillars">
+                    <div class="method-pillar">
+                        <div class="method-pillar-num" style="font-size:13px">Fees/Svc</div>
+                        <div class="method-pillar-title">Avg fees per service</div>
+                        <div class="method-pillar-body">Total MBS fee charged in the SA3 divided by total service count. A proxy for the billing intensity and patient-mix of the market. Higher fees reflect more complex consults, longer items, and/or lower bulk-billing discount. Percentile-ranked 0–100 across SA3s for map display.</div>
+                        <div class="method-pillar-equation">Source: Fee Charged ($) ÷ Services (MBS NRA)</div>
+                    </div>
+                    <div class="method-pillar">
+                        <div class="method-pillar-num" style="font-size:13px">Total $</div>
+                        <div class="method-pillar-title">Total fees</div>
+                        <div class="method-pillar-body">Gross fees charged to all GP NRA services in the SA3 over the rolling 4-quarter period. The total fee pool — irrespective of what Medicare pays vs. patient pays — is the best proxy for market revenue size. Percentile-ranked 0–100 for map display.</div>
+                        <div class="method-pillar-equation">Source: Fee Charged ($) rolling 4Q (MBS NRA)</div>
+                    </div>
+                    <div class="method-pillar">
+                        <div class="method-pillar-num" style="font-size:13px">BB%</div>
+                        <div class="method-pillar-title">Bulk billing rate</div>
+                        <div class="method-pillar-body">Proportion of consults bulk-billed (patient pays nothing). High BB% markets (remote, low-income) are characterised by thin margins but high volume and government supports. Low BB% markets (affluent metro) generate private billing revenue. The map uses a diverging colour scale centred at 50%.</div>
+                        <div class="method-pillar-equation">Source: Bulk-Billed Services ÷ Total Services (MBS NRA)</div>
+                    </div>
+                    <div class="method-pillar">
+                        <div class="method-pillar-num" style="font-size:13px">CAGR</div>
+                        <div class="method-pillar-title">3-year growth rates</div>
+                        <div class="method-pillar-body">Compares rolling 4 quarters ending Dec 2025 vs. same 4 quarters ending Dec 2022. Positive fee CAGR indicates market revenue expansion. Positive BB% CAGR indicates mix shift toward bulk-billing. Both use a diverging red-neutral-green scale centred at 0%.</div>
+                        <div class="method-pillar-equation">Baseline: rolling 4Q ending Dec 2022 (same quarter 3 years prior)</div>
+                    </div>
+                </div>
+
+                <div class="caveat" style="margin:10px 0 18px">
+                    <svg class="caveat-icon" viewBox="0 0 14 14" fill="none">
+                        <path d="M7 1L13 12H1L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                        <path d="M7 5v3M7 10v0.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                    <div class="caveat-body">
+                        <strong>NRA limitations.</strong> NRA covers GP Non-Referred Attendances only. It excludes allied health, specialist, pathology, diagnostic imaging, and after-hours urgency items. Telehealth and service-type breakdowns (item-level) are not available in this extract — a future upgrade could layer MBS item-level quarterly data (DS-07) for service-mix analysis. Metrics are SA3 aggregates; within-SA3 provider variation is not captured.
+                    </div>
+                </div>
+
+                <!-- ══════════════════════════════════════════════════════════════
+                     PART 2: CLINIC-LEVEL ANALYSIS
+                     ══════════════════════════════════════════════════════════════ -->
+                <h2 style="margin-top: 48px; padding-top: 24px; border-top: 2px solid #ddd;">Part 2: Clinic-Level Analysis</h2>
+                <p>Individual clinics are profiled across three dimensions: ownership classification, archetype (format & billing model), and catchment. Each clinic location generates its own metrics independent of regional aggregates.</p>
+
+                <!-- ── Clinic: Ownership classification ───────────────────────── -->
+                <h3>Ownership classification</h3>
+                <p>Every clinic is tagged across three ownership categories: <strong>Corporate</strong> (operating under a recognisable corporate brand), <strong>Independent</strong> (all others), and <strong>Public / NGO</strong> (government or not-for-profit). Any clinic type may be an acquisition target — corporate operators can be acquired as part of a platform or network transaction, and independents may be available for individual site roll-up.</p>
+
+                <div class="caveat" style="margin:14px 0 18px">
+                    <svg class="caveat-icon" viewBox="0 0 14 14" fill="none">
+                        <path d="M7 1L13 12H1L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                        <path d="M7 5v3M7 10v0.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                    <div class="caveat-body">
+                        <strong>Important caveat — read before quoting ownership figures.</strong>
+                        Ownership classification is <strong>Foundry's own internal tagging</strong>, applied against the clinic location dataset. Clinics operating under a recognisable corporate brand (e.g. ForHealth, IPN, Sonic, Healius, Tristar) are flagged 'Corporate'; all others default to 'Independent'. In practice, <strong>many corporate operators run sites under unbranded or locally-named entities</strong> — particularly in regional markets and post-acquisition portfolios — and these default to the 'Independent' bucket.
+                        <br /><br />
+                        Treat ownership classification as <strong>a directional screening signal, not an underwriting input</strong>. For any region under serious consideration, manual ownership verification (ASIC, ABN lookup, GP-level interviews) is required before deployment of capital. The model is a screening tool — not a deal-ready target list.
+                    </div>
+                </div>
+
+                <!-- ── Clinic: Archetype Classification ────────────────────── -->
+                <h3>Archetype Classification (Format, Billing, Ownership)</h3>
+                <p>Every clinic in the map is classified across three dimensions — <strong>Format</strong> (physical scale), <strong>Billing Model</strong> (payment mix), and <strong>Ownership</strong> (corporate affiliation). These classifications enable market segmentation, competitive benchmarking, and targeted acquisition strategy. All three use a three-tier fallback system: website signals (high confidence) → name keywords (medium confidence) → SA3-level aggregates (low confidence).</p>
+
+                <div class="method-pillars">
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">1</div>
+                        <div class="method-pillar-title">Format</div>
+                        <div class="method-pillar-body">Physical scale of the clinic — number of GPs, rooms, and operational footprint. Larger clinics may have higher leverage potential, faster onboarding, and stronger bulk-billing negotiations. Smaller clinics may have higher per-clinic margins but require more roll-up volume for consolidation economics.</div>
+                        <div class="method-pillar-equation">
+                            Classification priority: Doctor count (website scrape) → Name keywords → NHSD service type
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Big-box</strong> — ≥6 GPs OR website signals "multi-clinic", "chain", "medical centre". High confidence: doctor count from website scrape.</span>
+                            <span class="method-var"><strong>Mid-format</strong> — 3–5 GPs OR name contains "medical centre", "health hub", "group practice". Medium confidence: name keyword match.</span>
+                            <span class="method-var"><strong>Small</strong> — 1–2 GPs OR name contains "family clinic", "family doctor", "neighbourhood". High confidence: doctor count from scrape.</span>
+                            <span class="method-var"><strong>Unclassified</strong> — Insufficient signal across all tiers. Treated as independent variable in analysis; distribution inferred from SA3-level clusters.</span>
+                        </div>
+                        <div class="method-pillar-direction">Distribution: 14.1% Big-box · 25.1% Mid-format · 27.9% Small · 32.9% Unclassified.</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">2</div>
+                        <div class="method-pillar-title">Billing Model</div>
+                        <div class="method-pillar-body">Revenue mix between bulk-billed (100% patient subsidy via Medicare) and private-billed (patient pays gap fee). Bulk-billing dominated markets tend toward lower per-service margins but higher volume and government support. Private-billing markets extract higher per-service revenue but face price elasticity risk. Mixed billing clinics hedge both channels.</div>
+                        <div class="method-pillar-equation">
+                            Classification priority: Website billing keywords → SA3-level bulk-billing %, no fallback
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Bulk billing</strong> — Website text contains "bulk billing", "100% bulk", "no gap", "gap-free" (high signal weight: +2 per phrase match). Indicates policy commitment to 100% subsidy.</span>
+                            <span class="method-var"><strong>Private</strong> — Website text contains "fee-for-service", "private fees", "gap fees" (high signal: +2). Indicates mixed or fully private billing model.</span>
+                            <span class="method-var"><strong>Mixed</strong> — Signals for both bulk and private present, or ambiguous phrasing. Reflects real-world practice: many clinics do both.</span>
+                            <span class="method-var"><strong>Unclassified</strong> — No website signals detected. Fallback to SA3-level bulk-billing % from MBS NRA: &gt;70% BB% → assume Bulk; &lt;30% BB% → assume Private; 30–70% → assume Mixed.</span>
+                        </div>
+                        <div class="method-pillar-direction">Distribution: 15.4% Bulk · 4.7% Mixed · 4.6% Private · 75.3% Unclassified (mostly uses SA3 fallback).</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">3</div>
+                        <div class="method-pillar-title">Ownership</div>
+                        <div class="method-pillar-body">Corporate affiliation, reconciled from two sources. Website scraping detects current corporate signals; original NHSD registry contains historical corporate brands and Public/NGO designation. The two sources are merged intelligently to maximise accuracy: website-detected corporates are trusted (current); known corporates missed by scraping are recovered from the registry; Public/NGO is always preserved.</div>
+                        <div class="method-pillar-equation">
+                            Ownership_Final = [Original=Public/NGO] OR [Enriched=Corporate] OR [Original=Corporate, Enriched=Independent] OR Enriched=Independent
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Corporate</strong> — Website contains recognized corporate brand OR website scraping detected ownership signals (e.g. "Sonic", "IPN", "MyHealth") OR known corporate chain name. Known brands: ForHealth, Healius, Sonic, IPN, Eastbrooke, Our Medical, Ochre Health, SmartClinics, Atticus, Next Practice, Medicross, TLC Primary Care, Qualitas Health, Medical One, Tristar, Affiliated Doctors, Pulse, ProMedico, Doctors Lounge, Healthpoint. High confidence when website signals present.</span>
+                            <span class="method-var"><strong>Independent</strong> — Clinic operates without recognisable corporate affiliation. Includes sole proprietors, partnerships, and small unbranded groups. Default classification when no corporate signals detected.</span>
+                            <span class="method-var"><strong>Public / NGO</strong> — Government-funded community health, Aboriginal health services, or registered not-for-profit. Source: NHSD_SERVICE_TYPE field (e.g. "Maternal, child and family health service", "Aboriginal and Torres Strait Islander health service"). Out of scope for private consolidation.</span>
+                        </div>
+                        <div class="method-pillar-direction">Distribution: 10.9% Corporate · 81.1% Independent · 8.0% Public / NGO. Reconciliation recovered 300 clinics missed by enrichment and preserved 633 Public/NGO clinics that enrichment did not classify.</div>
+                    </div>
+                </div>
+
+                <div class="method-formula" style="margin-top:24px">
+                    <div class="method-formula-label">Worked example — "Moonee Ponds Medical Clinic" (Vic)</div>
+                    <div class="method-formula-body" style="font-size:12px;line-height:1.8">
+                        <strong>Format:</strong> Website scrape found 7 doctor names → Big-box (high confidence)<br>
+                        <strong>Billing:</strong> Website text: "bulk billing", "gap-free" → Bulk billing (high confidence)<br>
+                        <strong>Ownership:</strong> Original registry: Independent. Website scrape: detected corporate signals → Corporate (high confidence). Final: Corporate (website-based, current)
+                    </div>
+                </div>
+
+                <div class="caveat" style="margin:14px 0 18px">
+                    <svg class="caveat-icon" viewBox="0 0 14 14" fill="none">
+                        <path d="M7 1L13 12H1L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                        <path d="M7 5v3M7 10v0.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                    <div class="caveat-body">
+                        <strong>Archetype limitations.</strong> Format classification is incomplete (32.9% unclassified) pending ancillary services scrape (physiotherapy, pharmacy, dental presence) which will upgrade "medical centre" clinics from mid-format to big-box once room count is confirmed. Billing model relies heavily on SA3-level fallback (75.3% unclassified at clinic level) — individual clinic billing mix may vary significantly within the region. Ownership classification combines website-current signals with historical registry data; manual verification (ASIC, ABN) recommended before acquisition targeting.
+                    </div>
+                </div>
+
+                <div class="method-formula">
+                    <div class="method-formula-label">Classification tiers (in priority order)</div>
+                    <div class="method-formula-body" style="font-size:12px; line-height:1.8">
+                        <strong>Tier 1 (high confidence):</strong> Website scrape signals (keyword density, page content), clinic name patterns (e.g., "medical centre"), or direct doctor count from web scrape<br>
+                        <strong>Tier 2 (medium confidence):</strong> NHSD clinic name keywords, service type descriptors<br>
+                        <strong>Tier 3 (low confidence):</strong> SA3 regional aggregate % (e.g., bulk billing %, corporate penetration rate)
+                    </div>
+                </div>
+
+                <div class="method-pillars">
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">01</div>
+                        <div class="method-pillar-title">Format (clinic size)</div>
+                        <div class="method-pillar-body">Three size classes based on GP headcount and practice structure.</div>
+                        <div class="method-pillar-equation">
+                            <strong>Big-box:</strong> ≥6 GPs or website signals multi-location / corporate scale<br>
+                            <strong>Mid-format:</strong> 3–5 GPs or keywords like "medical centre", "health hub", "group practice"<br>
+                            <strong>Small:</strong> 1–2 GPs or keywords like "family clinic", "family doctor", "family practice"
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>GP headcount (Tier 1):</strong> Extracted from /doctors, /team, /our-doctors pages via regex; source: website scrape</span>
+                            <span class="method-var"><strong>Clinic name keywords (Tier 2):</strong> Pattern match on ORGANISATION_NAME field</span>
+                            <span class="method-var"><strong>Fallback (Tier 3):</strong> Not applicable; clinics without Tier 1/2 signals are marked 'Unclassified'</span>
+                        </div>
+                        <div class="method-pillar-direction">Higher GP count → Big-box. Clinic name signals are scored; ambiguous names default to Unclassified.</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">02</div>
+                        <div class="method-pillar-title">Billing Model (reimbursement)</div>
+                        <div class="method-pillar-body">Three billing strategies based on revenue reimbursement mix.</div>
+                        <div class="method-pillar-equation">
+                            <strong>Bulk:</strong> Predominantly bulk-billing (Medicare rebate only); website states "bulk billing" or "100% bulk billing"<br>
+                            <strong>Mixed:</strong> Clinic accepts both bulk and private patients; website mentions both billing types<br>
+                            <strong>Private:</strong> Predominantly private-billing (patient gap payment); website emphasizes private consultation fees
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Billing keywords (Tier 1):</strong> Keyword extraction from clinic website homepage and contact pages (bulk_billing, private, mixed)</span>
+                            <span class="method-var"><strong>SA3 regional fallback (Tier 3):</strong> If website scrape yields no billing signals, use SA3's bulk billing % from Medicare quarterly statistics. >70% BB in region → assume 'Bulk'; <30% → assume 'Private'; else 'Mixed'</span>
+                        </div>
+                        <div class="method-pillar-direction">Explicit website signals preferred. SA3-level fallback used only when no clinic-level data is available.</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">03</div>
+                        <div class="method-pillar-title">Ownership (operator type)</div>
+                        <div class="method-pillar-body">Three ownership classes based on corporate affiliation.</div>
+                        <div class="method-pillar-equation">
+                            <strong>Corporate:</strong> Clinic is part of a named corporate group (e.g., ForHealth, Healius, IPN, My Health)<br>
+                            <strong>Independent:</strong> Single-location or locally-owned practice with no corporate affiliation<br>
+                            <strong>Public / NGO:</strong> Government-run, community health service, or non-profit operator
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Corporate brand detection (Tier 1):</strong> Website scrape identifies corporate marketing language or logo. Fallback to NHSD clinic name pattern match against known corporate brand list (~50 major groups).</span>
+                            <span class="method-var"><strong>Known corporate list (Tier 2):</strong> Curated list including: Healius, My Health, Sonic HealthPlus, IPN, East Brooke, ForHealth, Primary Care Australia, Medicross, Ochre Health, SmartClinics, Family Doctor Network, and others. Reconciled from website data and NHSD registry.</span>
+                            <span class="method-var"><strong>NHSD service type (Tier 3):</strong> If clinic name contains "Ltd", "Corporation", "Pty Ltd", infer Corporate; else default to Independent</span>
+                        </div>
+                        <div class="method-pillar-direction">Website corporate signals > name-based keywords > NHSD fallback. Public/NGO is preserved from NHSD classification and never overridden by web signals.</div>
+                    </div>
+                </div>
+
+                <div class="method-formula">
+                    <div class="method-formula-label">Worked example</div>
+                    <div class="method-formula-body" style="font-size:12px; line-height:1.8">
+                        <strong>Moonee Ponds Medical Clinic</strong> (Melbourne, VIC)<br>
+                        Website: www.mooneepondsmedical.com.au<br>
+                        <br>
+                        <strong>Format:</strong> /doctors page lists 4 named GPs → Classification: <strong>Mid-format</strong> (Tier 1, high confidence)<br>
+                        <strong>Billing:</strong> Homepage states "We are a bulk-billing clinic" → Classification: <strong>Bulk</strong> (Tier 1, high confidence)<br>
+                        <strong>Ownership:</strong> No corporate brand detected on website; clinic name is generic; NHSD registry shows independent operator → Classification: <strong>Independent</strong> (Tier 2/3, medium confidence)
+                    </div>
+                </div>
+
+                <div class="method-conf-table" style="margin-top:24px">
+                    <div class="method-conf-row method-conf-head">
+                        <span>Confidence</span>
+                        <span>Definition</span>
+                    </div>
+                    <div class="method-conf-row">
+                        <span style="font-weight:600; color:var(--sage-deep)">High</span>
+                        <span>Website scrape signals + direct evidence (doctor names, billing language). ~44% of classified clinics.</span>
+                    </div>
+                    <div class="method-conf-row">
+                        <span style="font-weight:600; color:#A67C52">Medium</span>
+                        <span>Name keywords or NHSD registry fallback. ~26% of classified clinics.</span>
+                    </div>
+                    <div class="method-conf-row">
+                        <span style="font-weight:600; color:var(--muted)">Low</span>
+                        <span>SA3 regional aggregate or Unclassified. ~30% of clinics (no signals in higher tiers).</span>
+                    </div>
+                </div>
+
+                <!-- ── Clinic: GP FTE Estimation ────────────────────────────── -->
+                <h3>GP FTE Estimation — Effective Capacity Model</h3>
+                <p>This model estimates <strong>GP FTE (Full-Time Equivalent)</strong> based on the assumption that GPs typically work part-time or split their time across multiple locations.</p>
+
+                <div class="method-formula">
+                    <div class="method-formula-label">Core formula</div>
+                    <div class="method-formula-body" style="font-size:12px; line-height:1.8">
+                        <strong>GP FTE = GP Headcount × 0.75</strong><br><br>
+                        This uniform factor of 0.75 is applied to <em>all clinics</em> (both corporate and independent) and reflects industry data suggesting that GPs commonly work part-time, flexible schedules, or across multiple locations.<br><br>
+                        <em>Example: A clinic with 4 identified GPs → FTE = 4 × 0.75 = 3.0</em>
+                    </div>
+                </div>
+
+                <div class="method-conf-table" style="margin-top:16px">
+                    <div class="method-conf-row method-conf-head">
+                        <span>Known limitation</span>
+                        <span>Implication</span>
+                    </div>
+                    <div class="method-conf-row">
+                        <span style="font-weight:600">Uniform factor</span>
+                        <span>The 0.75 multiplier is applied uniformly across all clinics. Actual FTE may vary by clinic size, ownership, and location — this metric provides a conservative lower-bound estimate.</span>
+                    </div>
+                    <div class="method-conf-row">
+                        <span style="font-weight:600">Incomplete GP data</span>
+                        <span>Not all clinics have complete GP headcount data. Metrics marked with <strong>&gt;</strong> indicate a lower bound; percentage shows what proportion of clinics in the catchment have confirmed GP counts.</span>
+                    </div>
+                    <div class="method-conf-row">
+                        <span style="font-weight:600">Part-time vs full-time distinction</span>
+                        <span>The model does not distinguish between GPs employed part-time at a single location versus those working across multiple locations. The 0.75 factor is an average across both patterns.</span>
+                    </div>
+                </div>
+
+                <div class="method-formula" style="margin-top:16px">
+                    <div class="method-formula-label">Terminology</div>
+                    <div class="method-formula-body" style="font-size:12px; line-height:1.8">
+                        <strong>GP FTE</strong> represents the estimated full-time equivalent based on headcount. It is a conservative estimate and should be used for high-level capacity planning, not detailed workforce allocation.<br><br>
+                        <strong>Lower-bound notation (&gt;)</strong> is used when displaying metrics based on incomplete data — it indicates that the true value may be higher.
+                    </div>
+                </div>
+
+                <!-- ── Clinic: Catchment Analysis ──────────────────────────── -->
+                <h3>Catchment Analysis (15-minute Isochrone)</h3>
+                <p>Clicking any clinic on the map loads a 15-minute drive-time catchment and computes three metrics — population served, competitive density, and nearest rival distance — directly from that polygon. This is distinct from the SA3-level scores above: it characterises the individual clinic's local market, not the broader region.</p>
+
+                <div class="method-pillars">
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">I</div>
+                        <div class="method-pillar-title">Isochrone construction</div>
+                        <div class="method-pillar-weight">15-minute drive time · Mapbox Isochrone API</div>
+                        <div class="method-pillar-body">Each catchment polygon is pre-computed using the Mapbox Isochrone API with a 15-minute driving contour centred on the clinic's geocoded coordinates. Drive-time contours reflect real road network conditions (speed limits, road class) rather than straight-line buffers. All 7,845 isochrones are stored as individual GeoJSON files and fetched on demand — no real-time API call is made when a clinic is selected.</div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Contour type</strong> — drive-time (not distance); 15 minutes from clinic coordinates</span>
+                            <span class="method-var"><strong>Source</strong> — Mapbox Isochrone API v1, road-network routing</span>
+                            <span class="method-var"><strong>Vintage</strong> — pre-computed and static; not re-queried in real time</span>
+                        </div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">II</div>
+                        <div class="method-pillar-title">Population served</div>
+                        <div class="method-pillar-weight">Aggregate SA1 population · ABS Census 2021</div>
+                        <div class="method-pillar-body">The population within a clinic's catchment is estimated by aggregating ABS 2021 Census population counts at the Statistical Area Level 1 (SA1) — the smallest published census geography, typically 200–800 residents. For each SA1 whose centroid falls inside the isochrone polygon, its total person count (<em>Tot_P_P</em> from Census table G01) is added to the catchment total. SA1s whose centroid falls outside the polygon are excluded, even if part of their area overlaps — this is a centroid-in-polygon approximation.</div>
+                        <div class="method-pillar-equation">
+                            Population served = Σ Tot_P_P for all SA1s where centroid ∈ isochrone
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>SA1 universe</strong> — 61,811 SA1s covering all of Australia (2021 ABS boundaries)</span>
+                            <span class="method-var"><strong>SA1 geometry</strong> — Centroid coordinates pre-computed and cached as CSV for performance</span>
+                            <span class="method-var"><strong>Point-in-polygon test</strong> — Turf.js <code>booleanPointInPolygon()</code> for each SA1 centroid against isochrone Feature polygon</span>
+                            <span class="method-var"><strong>Census table</strong> — G01 Selected Person Characteristics, ABS Census 2021</span>
+                            <span class="method-var"><strong>Field</strong> — <code>Tot_P_P</code> (total persons, both sexes) by SA1</span>
+                            <span class="method-var"><strong>Approximation</strong> — centroid-in-polygon only; partial SA1 area overlap at catchment boundary is not pro-rated. SA1s straddling the isochrone edge are included or excluded based solely on whether their centroid falls within the polygon.</span>
+                            <span class="method-var"><strong>Edge case</strong> — SA1s with ambiguous or missing centroid data are excluded from the aggregate</span>
+                        </div>
+                        <div class="method-pillar-direction">Higher <em>Population served</em> indicates a larger addressable market within 15 minutes of the clinic. Population figures are 2021 Census counts (not forward-projected); fast-growing outer suburban areas may be slightly understated. Interpret alongside <em>Competitive Density</em> to assess market saturation.</div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">III</div>
+                        <div class="method-pillar-title">Competitive density</div>
+                        <div class="method-pillar-weight">Clinics and GPs within catchment</div>
+                        <div class="method-pillar-body">All clinics from the Foundry database whose coordinates fall inside the isochrone polygon are counted as competitors. GP headcounts are summed across those clinics to give total GPs in catchment. Density (clinics per km²) is the clinic count divided by the isochrone area in km². The national average benchmark is the count-weighted median of per-SA3 clinic density across all 336 SA3s — weighted by clinic count so that the reference reflects where clinics actually operate rather than averaging across vast, low-density outback SA3s.</div>
+                        <div class="method-pillar-equation">
+                            Density = clinics in catchment ÷ isochrone area (km²)
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Clinic universe</strong> — 7,845 GP practices with validated coordinates</span>
+                            <span class="method-var"><strong>National avg</strong> — count-weighted median of SA3 clinic densities (~0.15 clinics/km²)</span>
+                            <span class="method-var"><strong>GPs in catchment</strong> — sum of <code>gp_count</code> for all clinics within polygon</span>
+                        </div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">IV</div>
+                        <div class="method-pillar-title">Nearest rival distance</div>
+                        <div class="method-pillar-weight">Straight-line · Haversine formula via Turf.js</div>
+                        <div class="method-pillar-body">The distance from the selected clinic to the nearest other clinic whose coordinates fall within the isochrone is computed as a straight-line (Haversine) distance using Turf.js. This identifies the most proximate in-catchment competitor, not necessarily the nearest clinic on the road network. A large nearest-rival distance indicates a relatively protected local position; a small distance indicates high proximate competition.</div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Method</strong> — Haversine great-circle distance (Turf.js <code>turf.distance</code>)</span>
+                            <span class="method-var"><strong>Scope</strong> — in-catchment clinics only; rivals outside the isochrone are excluded</span>
+                            <span class="method-var"><strong>Unit</strong> — kilometres, rounded to one decimal place</span>
+                        </div>
+                    </div>
+
+                    <div class="method-pillar">
+                        <div class="method-pillar-num">V</div>
+                        <div class="method-pillar-title">Catchment comparison (two-clinic mode)</div>
+                        <div class="method-pillar-weight">Polygon intersection · Turf.js</div>
+                        <div class="method-pillar-body">Clicking a second clinic activates comparison mode, rendering both isochrones on the map and computing overlap metrics. The overlap percentage is the intersecting polygon area divided by the first clinic's total catchment area. <em>Net unique catchment</em> is calculated as the union area minus the intersection — showing the combined addressable market if both clinics are considered as part of a single network. Clinic pairs are categorised as: <em>Complementary</em> (&lt;30% overlap) — minimal patient overlap, geographically distinct; <em>Overlapping</em> (30–70%) — significant but not complete market overlap; <em>Highly Overlapping</em> (&gt;70%) — similar catchment footprints, strong cannibalization risk. Head-to-head metrics (population served, residents per clinic, rival count) are computed independently for each catchment using the same SA1 centroid-in-polygon aggregation logic, allowing direct comparison of market characteristics.</div>
+                        <div class="method-pillar-equation">
+                            Overlap % = area(iso₁ ∩ iso₂) ÷ area(iso₁) × 100<br/>
+                            Net Unique Catchment = area(iso₁ ∪ iso₂) − area(iso₁ ∩ iso₂)
+                        </div>
+                        <div class="method-pillar-vars">
+                            <span class="method-var"><strong>Geometry union</strong> — <code>turf.union()</code> on both isochrone Features to compute combined area</span>
+                            <span class="method-var"><strong>Geometry intersection</strong> — <code>turf.intersect()</code> on the two isochrone Feature polygons to compute overlapping area</span>
+                            <span class="method-var"><strong>Area calculation</strong> — <code>turf.area()</code> returns area in square metres; converted to km² for display</span>
+                            <span class="method-var"><strong>Population in overlap zone</strong> — SA1s whose centroid falls in the intersection polygon; counted in both clinics' individual population figures but represent shared addressable market</span>
+                            <span class="method-var"><strong>Clinic 1 colour</strong> — purple #7C3AED (primary selection)</span>
+                            <span class="method-var"><strong>Clinic 2 colour</strong> — orange #E8862C (secondary selection)</span>
+                            <span class="method-var"><strong>Overlap zone</strong> — semi-transparent blend where both isochrones intersect</span>
+                        </div>
+                        <div class="method-pillar-direction">Use overlap metrics to assess portfolio consolidation potential. High overlap suggests opportunity to rationalize clinic footprints or optimize GP scheduling. Low overlap indicates geographic complementarity — combining networks may fill service gaps. View in context of local demand growth and competitive density within each zone.</div>
+                    </div>
+                </div>
+
+                <!-- ══════════════════════════════════════════════════════════════
+                     PART 3: DATA SOURCES & LIMITATIONS
+                     ══════════════════════════════════════════════════════════════ -->
+                <h2 style="margin-top: 48px; padding-top: 24px; border-top: 2px solid #ddd;">Part 3: Data Sources & Limitations</h2>
+
+                <!-- ── Data sources ──────────────────────────────────────────── -->
+                <h3>Data sources</h3>
+                <p>Every input used across the three scores is listed below with its vintage, spatial granularity, and which score(s) it feeds into.</p>
+
+                <div class="method-data-table-wrap">
+                    <table class="method-data-table">
+                        <thead>
+                            <tr>
+                                <th>Dataset</th>
+                                <th>Publisher</th>
+                                <th>Vintage</th>
+                                <th>Granularity</th>
+                                <th>Metric(s) derived</th>
+                                <th>Feeds into</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Estimated Resident Population &amp; projections</td>
+                                <td>ABS</td>
+                                <td>2025</td>
+                                <td>SA3</td>
+                                <td>Population, annual growth rate, % aged 65+</td>
+                                <td><span class="score-pill pill-composite">Composite · Demand</span></td>
+                            </tr>
+                            <tr>
+                                <td>GP clinic location dataset</td>
+                                <td>Geoscience Australia (CC BY 4.0)</td>
+                                <td>Mar 2025</td>
+                                <td>Point (clinic)</td>
+                                <td>Clinic count, clinics per 10,000 residents</td>
+                                <td><span class="score-pill pill-composite">Composite · Supply</span></td>
+                            </tr>
+                            <tr>
+                                <td>Clinic ownership classification</td>
+                                <td>Foundry Health (internal)</td>
+                                <td>Mar 2025</td>
+                                <td>Point (clinic)</td>
+                                <td>% Independent, % Corporate, % Public/NGO</td>
+                                <td>
+                                    <span class="score-pill pill-composite">Composite · Competition</span>
+                                    <span class="score-pill pill-whitespace">Whitespace</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Income, expenditure &amp; wealth survey</td>
+                                <td>ABS</td>
+                                <td>2023</td>
+                                <td>SA3 (interpolated)</td>
+                                <td>Median household income</td>
+                                <td>
+                                    <span class="score-pill pill-composite">Composite · Economics</span>
+                                    <span class="score-pill pill-whitespace">Whitespace</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Modified Monash Model (MMM) classification</td>
+                                <td>Dept. Health &amp; Aged Care</td>
+                                <td>2019 (current)</td>
+                                <td>SA2 → dominant SA3</td>
+                                <td>MMM class 1–7 (remoteness proxy)</td>
+                                <td>
+                                    <span class="score-pill pill-composite">Composite · Economics</span>
+                                    <span class="score-pill pill-workforce">Workforce Risk</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Health Workforce Data — GP FTE by MMM class</td>
+                                <td>Dept. Health &amp; Aged Care (HWD)</td>
+                                <td>2025</td>
+                                <td>National (7 MMM classes)</td>
+                                <td>GP FTE per 10,000 pop.; % GP aged ≥55</td>
+                                <td>
+                                    <span class="score-pill pill-workforce">Workforce · Supply</span>
+                                    <span class="score-pill pill-workforce">Workforce · Age</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>DoctorConnect DPA shapefiles — Bonded program</td>
+                                <td>Dept. Health &amp; Aged Care</td>
+                                <td>2020</td>
+                                <td>DPA polygon (934 areas)</td>
+                                <td>DPA_Bonded flag (SA3 spatial intersection)</td>
+                                <td><span class="score-pill pill-workforce">Workforce · DPA</span></td>
+                            </tr>
+                            <tr>
+                                <td>DoctorConnect DPA shapefiles — GP/IMG program</td>
+                                <td>Dept. Health &amp; Aged Care</td>
+                                <td>2020</td>
+                                <td>DPA polygon (941 areas)</td>
+                                <td>DPA_GP_IMG flag (SA3 spatial intersection)</td>
+                                <td><span class="score-pill pill-workforce">Workforce · DPA</span></td>
+                            </tr>
+                            <tr>
+                                <td>SEIFA IRSAD</td>
+                                <td>ABS</td>
+                                <td>2021 Census</td>
+                                <td>SA2</td>
+                                <td>Socio-economic decile (1 most disadvantaged → 10)</td>
+                                <td><span class="score-pill pill-seifa">SEIFA overlay</span></td>
+                            </tr>
+                            <tr>
+                                <td>MBS Non-Referred Attendances — quarterly statistics (SA3)</td>
+                                <td>Dept. Health &amp; Aged Care (Medicare)</td>
+                                <td>FY2021–FY2026 Q2 (Dec 2025)</td>
+                                <td>SA3 (335 / 336 regions; Lord Howe Island suppressed)</td>
+                                <td>Total fees, avg fees/service, bulk billing %, 3-year CAGR</td>
+                                <td><span class="score-pill pill-nra">GP Billings</span></td>
+                            </tr>
+                            <tr>
+                                <td>Medicare Urgent Care Clinic (UCC) directory</td>
+                                <td>Dept. Health &amp; Aged Care</td>
+                                <td>May 2025</td>
+                                <td>Point (clinic)</td>
+                                <td>UCC_Present flag per SA3 (spatial join)</td>
+                                <td><span class="score-pill pill-nra">GP Billings</span></td>
+                            </tr>
+                            <tr>
+                                <td>Australian Statistical Geography Standard (ASGS)</td>
+                                <td>ABS</td>
+                                <td>2021</td>
+                                <td>SA2 &amp; SA3 boundaries</td>
+                                <td>Spatial boundaries for all polygon layers</td>
+                                <td>
+                                    <span class="score-pill pill-composite">Composite</span>
+                                    <span class="score-pill pill-workforce">Workforce</span>
+                                    <span class="score-pill pill-whitespace">Whitespace</span>
+                                    <span class="score-pill pill-seifa">SEIFA</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>Data coverage</h3>
+                <p>The clinic universe was sourced from the <strong>NHSD National Health Practitioner Directory</strong> (Australian health practitioners). Clinic enrichment includes website URLs (Google Places API), GP counts (web scraping + manual enrichment), format classification (heuristics + GP count thresholds), and service availability (Billing Type, Allied Health, Pathology, Imaging).</p>
+
+                <div class="method-data-table">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Data Dimension</th>
+                                <th>With Data</th>
+                                <th>Without Data</th>
+                                <th>% Complete</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Total Clinic Count</strong></td>
+                                <td>7,846</td>
+                                <td>—</td>
+                                <td><strong>100.0%</strong></td>
+                            </tr>
+                            <tr class="highlight">
+                                <td>URL (Website)</td>
+                                <td>4,677</td>
+                                <td>3,169</td>
+                                <td>59.6%</td>
+                            </tr>
+                            <tr class="highlight">
+                                <td>Format (Clinic Classification)</td>
+                                <td>3,155</td>
+                                <td>4,691</td>
+                                <td>40.2%</td>
+                            </tr>
+                            <tr class="highlight">
+                                <td>GP Count</td>
+                                <td>3,047</td>
+                                <td>4,799</td>
+                                <td>38.8%</td>
+                            </tr>
+                            <tr>
+                                <td>Billing Type</td>
+                                <td>971</td>
+                                <td>6,875</td>
+                                <td>12.4%</td>
+                            </tr>
+                            <tr>
+                                <td>Allied Health Services</td>
+                                <td>973</td>
+                                <td>6,873</td>
+                                <td>12.4%</td>
+                            </tr>
+                            <tr>
+                                <td>Pathology Services</td>
+                                <td>973</td>
+                                <td>6,873</td>
+                                <td>12.4%</td>
+                            </tr>
+                            <tr>
+                                <td>Imaging / Radiology Services</td>
+                                <td>973</td>
+                                <td>6,873</td>
+                                <td>12.4%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <p><strong>Interpretation:</strong> All 7,846 clinics in the dataset have basic location and ownership data. However, enriched operational data (website, GP count, format) is available for 40–60% of clinics. Service-level details (billing type, Allied Health, pathology, imaging) are sparse (12.4% coverage), representing clinics with available enrichment data or verified service offerings. For analyses dependent on enriched fields, treat results as representative of clinics with available data; clinics with missing data may differ systematically in size, location remoteness, or web presence.</p>
+
+                <h3>Limitations</h3>
+                <p>The Workforce Risk Score imputes GP workforce metrics from MMM-class national benchmarks rather than SA3-level actuals — HWD does not publish at the SA3 level. All SA3s sharing the same dominant MMM class receive the same FTE/10k and % ≥55 values; local variation within a class is not captured. DPA shapefiles are 2020 vintage and may not reflect reclassifications since that date. The model does not capture practice-level financials, GP retention risk, or local referral dynamics. Use it as a top-down screening tool, then layer bottom-up underwriting on shortlisted regions.</p>
+            </article>
+        </section>
+        <!-- ============================================================
+             TARGETS (legacy standalone — now inside map sub-tab)
+             ============================================================ -->
+        <!-- Targets legacy shell (IDs removed — live content is in subpanel-targets) -->
+
+        <!-- Data Studio view -->
+        <section class="view view-data-studio" data-view="data-studio">
+            <div class="ds-container">
+                <!-- Top bar with model confidence -->
+                <div class="ds-topbar">
+                    <div class="ds-topbar-left">
+                        <h1 class="ds-title">Data Studio</h1>
+                        <span class="ds-subtitle">Configure data sources for market-investability model</span>
+                    </div>
+                    <div class="ds-topbar-right">
+                        <div class="ds-confidence-chip">
+                            <span class="ds-confidence-label">Model confidence</span>
+                            <span class="ds-confidence-value" id="ds-confidence-value">—</span>
+                        </div>
+                        <span class="ds-markets-count">
+                            <span id="ds-markets-in-scope">0</span>/<span id="ds-markets-total">3</span> markets
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="ds-controls">
+                    <button id="ds-reset-btn" class="ds-btn-secondary">↻ Reset</button>
+                    <button id="ds-save-btn" class="ds-btn-primary">Save model</button>
+                </div>
+
+                <!-- Scroll container -->
+                <div class="ds-scroll">
+                    <!-- Markets Data Section -->
+                    <div class="ds-section">
+                        <div class="ds-section-head">
+                            <h2 class="ds-section-title">Markets data</h2>
+                            <span class="ds-section-sub">Provider-level data · configurable at market level</span>
+                        </div>
+
+                        <!-- GP Clinics Market -->
+                        <div class="ds-market-group" data-market="gp">
+                            <div class="ds-market-header">
+                                <label class="ds-market-toggle">
+                                    <input type="checkbox" class="ds-market-checkbox" checked>
+                                    <span class="ds-toggle-slider"></span>
+                                    <span class="ds-market-name">GP Clinics</span>
+                                </label>
+                            </div>
+                            <div class="ds-datasets" id="gp-datasets"></div>
+                        </div>
+
+                        <!-- Physio Clinics Market -->
+                        <div class="ds-market-group" data-market="physio">
+                            <div class="ds-market-header">
+                                <label class="ds-market-toggle">
+                                    <input type="checkbox" class="ds-market-checkbox" checked>
+                                    <span class="ds-toggle-slider"></span>
+                                    <span class="ds-market-name">Physio Clinics</span>
+                                </label>
+                            </div>
+                            <div class="ds-datasets" id="physio-datasets"></div>
+                        </div>
+
+                        <!-- Dental Clinics Market -->
+                        <div class="ds-market-group" data-market="dental">
+                            <div class="ds-market-header">
+                                <label class="ds-market-toggle">
+                                    <input type="checkbox" class="ds-market-checkbox" checked>
+                                    <span class="ds-toggle-slider"></span>
+                                    <span class="ds-market-name">Dental Clinics</span>
+                                </label>
+                            </div>
+                            <div class="ds-datasets" id="dental-datasets"></div>
+                        </div>
+                    </div>
+
+                    <!-- Shared Data Section -->
+                    <div class="ds-section">
+                        <div class="ds-section-head">
+                            <h2 class="ds-section-title">Shared data</h2>
+                            <span class="ds-section-sub">🔒 Fixed · always included</span>
+                        </div>
+                        <div id="shared-datasets"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ============================================================
+         Footer
+         ============================================================ -->
+    <footer class="app-footer">
+        <div class="footer-stamp">
+            <span class="footer-dot"></span>
+            <span>Australia · Multi-market healthcare intelligence</span>
+        </div>
+        <div>Foundry Intelligence Platform · v2.0 · Confidential</div>
+    </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+<div id="toast" class="toast hidden"></div>
+<script src="js/app.js?v=rr15"></script>
+<script src="js/components/targets-tab.js?v=rr3"></script>
+<script src="js/components/right-rail.js?v=rr5" defer></script>
+
+<script>
+// Initialize left rail UI based on market and settings
+function initializeLeftRailUI() {
+    const market = new URLSearchParams(window.location.search).get('market') || 'gp';
+
+    // Hide login buttons
+    const loginBtn = document.getElementById('login-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    if (loginBtn) loginBtn.style.display = 'none';
+    if (logoutBtn) logoutBtn.style.display = 'none';
+
+    // Clinics section: collapse it by default, and grey out for physio
+    const accBodyClinics = document.getElementById('acc-body-clinics');
+    const clinicsArrow = document.getElementById('acc-arrow-clinics');
+    const accClinics = document.getElementById('acc-clinics');
+    const clinicsHdr = accClinics?.querySelector('.rail-accordion-hdr');
+
+    // Collapse clinics section by default
+    if (accBodyClinics && !accBodyClinics.classList.contains('collapsed')) {
+        accBodyClinics.classList.add('collapsed');
+        if (clinicsArrow) clinicsArrow.textContent = '▸';
+    }
+
+    // For physio: grey out clinics (no chains/archetypes classified) and make non-clickable
+    if (market === 'physio' && accClinics) {
+        accClinics.classList.add('physio-disabled');
+        if (clinicsHdr) {
+            clinicsHdr.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                return false;
+            };
+        }
+    } else if (accClinics) {
+        accClinics.classList.remove('physio-disabled');
+        if (clinicsHdr) {
+            // Restore click handler for GP market
+            clinicsHdr.onclick = () => toggleAccordion('clinics');
+        }
+    }
+}
+
+// Run on DOM ready
+document.addEventListener('DOMContentLoaded', initializeLeftRailUI);
+
+// Also initialize when State is ready
+setTimeout(() => {
+    if (window.State) {
+        initializeLeftRailUI();
+    }
+}, 1000);
+</script>
+</body>
+</html>

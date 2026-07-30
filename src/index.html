@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Foundry Intelligence Platform</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&display=swap" />
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --green: #6E9277;
+  --green-light: #C5E0B3;
+  --green-mid: #97C777;
+  --green-dark: #465E4D;
+  --amber: #E0A800;
+  --amber-soft: #FFF6DD;
+  --red: #C0392B;
+  --ink: #14140F;
+  --ink-2: #3a3a37;
+  --ink-3: #8A8A86;
+  --ink-4: #BCBCB6;
+  --line: #DEDEDA;
+  --line-2: #ECECE8;
+  --bg: #F6F6F3;
+  --panel: #fff;
+  --accent-soft: #EAF0EB;
+}
+
+html, body {
+  height: 100%;
+  font-family: 'Helvetica Neue', Helvetica, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Top bar — matches app-header in index.html ── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  background: #fff;
+  border-bottom: 1px solid #CACACA;
+  position: relative;
+  z-index: 50;
+  flex-shrink: 0;
+  height: 48px;
+}
+.brand {
+  display: flex; align-items: center; gap: 14px;
+  text-decoration: none; color: inherit; cursor: pointer;
+}
+.brand-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 28px; border: 1.5px solid #000;
+  font-family: 'Helvetica Neue', Helvetica, system-ui, sans-serif;
+  font-weight: 700; font-size: 13px; letter-spacing: -0.02em; color: #000; line-height: 1;
+}
+.brand-divider { width: 1px; height: 20px; background: #CACACA; }
+.brand-wordmark {
+  font-family: 'Helvetica Neue', Helvetica, system-ui, sans-serif;
+  font-weight: 500; font-size: 13px; letter-spacing: 0.18em; color: #000;
+}
+.brand-product {
+  font-family: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
+  font-weight: 400; font-style: italic; font-size: 13px; color: #9A9A9A;
+  margin-left: 14px; padding-left: 14px; border-left: 1px solid #CACACA;
+}
+.nav {
+  display: flex; gap: 2px;
+  position: absolute; left: 50%; transform: translateX(-50%);
+}
+.nav-btn {
+  padding: 8px 16px; font-size: 13px; font-weight: 500;
+  color: #9A9A9A; border-radius: 4px; background: none; border: none;
+  cursor: pointer; transition: color 0.15s, background 0.15s;
+  font-family: inherit; letter-spacing: 0.01em;
+}
+.nav-btn:hover { color: #000; background: #F2F5F0; }
+.nav-btn.active { color: #000; background: #E8EFE9; }
+.actions { display: flex; align-items: center; gap: 10px; }
+.action-meta { font-size: 11px; color: #9A9A9A; letter-spacing: 0.04em; text-transform: uppercase; }
+.login-btn {
+  font-family: inherit; font-size: 13px; font-weight: 500;
+  color: #9A9A9A; background: none; border: none;
+  padding: 8px 16px; border-radius: 4px; cursor: pointer;
+  transition: color 0.15s, background 0.15s; letter-spacing: 0.01em;
+}
+.login-btn:hover { color: #000; background: #F2F5F0; }
+
+/* ── Body ── */
+.body {
+  flex: 1;
+  overflow-y: auto;
+  height: calc(100vh - 48px);
+}
+
+.inner {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 36px 40px 80px;
+  display: grid;
+  grid-template-columns: 1fr 368px;
+  gap: 40px;
+  align-items: start;
+}
+
+/* ── Left: market picker ── */
+.eyebrow {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--green);
+}
+.h1 {
+  font-size: 30px; font-weight: 700; letter-spacing: -0.015em;
+  margin: 8px 0 7px;
+}
+.sub { font-size: 13.5px; color: var(--ink-3); line-height: 1.55; }
+
+.search {
+  margin: 20px 0 6px;
+  display: flex; align-items: center; gap: 10px;
+  background: #fff; border: 1px solid var(--line);
+  border-radius: 9px; padding: 11px 15px; max-width: 480px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  transition: border-color 0.15s;
+}
+.search:focus-within { border-color: var(--green); }
+.search .mag { color: var(--ink-4); font-size: 14px; flex-shrink: 0; }
+.search input {
+  border: none; outline: none; background: transparent;
+  font-family: inherit; font-size: 13px; color: var(--ink-3);
+  flex: 1; min-width: 0;
+}
+.search input::placeholder { color: var(--ink-4); }
+.search .kbd {
+  font-size: 10px; font-weight: 600; color: var(--ink-3);
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 7px; flex-shrink: 0;
+}
+
+.group-head {
+  display: flex; align-items: center; gap: 10px;
+  margin: 28px 0 12px;
+}
+.group-head .t {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-2);
+  white-space: nowrap;
+}
+.group-head .ln { flex: 1; height: 1px; background: var(--line); }
+.group-head .ct { font-size: 10px; color: var(--ink-4); }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* ── Market card ── */
+.mcard {
+  background: #fff; border: 1px solid var(--line);
+  border-radius: 10px; padding: 14px 15px;
+  cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s;
+  position: relative;
+}
+.mcard:hover { border-color: var(--green); box-shadow: 0 4px 16px -8px rgba(0,0,0,0.18); }
+.mcard.sel {
+  border-color: var(--green-dark);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 8px 24px -14px rgba(0,0,0,0.28);
+}
+.mcard.beta { opacity: 0.55; cursor: not-allowed; }
+.mcard.beta:hover { border-color: var(--line); box-shadow: none; }
+.mcard.onb { opacity: 0.55; cursor: not-allowed; }
+.mcard.onb:hover { border-color: var(--line); box-shadow: none; }
+
+.mcard-top {
+  display: flex; align-items: center;
+  justify-content: space-between; margin-bottom: 11px;
+}
+.mcard-ic {
+  width: 32px; height: 32px; border-radius: 7px;
+  background: var(--green-dark); color: #fff;
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 700;
+}
+.mcard.beta .mcard-ic { background: var(--amber); color: #5c4500; }
+.mcard.onb .mcard-ic  { background: var(--ink-4); }
+
+.st {
+  font-size: 8.5px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; padding: 2px 7px; border-radius: 3px;
+}
+.st.live { background: var(--accent-soft); color: var(--green-dark); }
+.st.beta { background: var(--amber-soft); color: #8A6500; }
+.st.onb  { background: var(--line-2); color: var(--ink-3); }
+
+.mcard-nm { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+.mcard-desc { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; line-height: 1.4; min-height: 28px; }
+
+.mcard-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line-2);
+}
+.mcard-foot .stat { font-size: 10.5px; color: var(--ink-3); }
+.mcard-foot .stat b { color: var(--ink); font-weight: 700; }
+.mcard-foot .sel-lbl { font-size: 11px; font-weight: 700; }
+
+.covbar { height: 4px; border-radius: 2px; background: var(--line-2); margin-top: 9px; overflow: hidden; }
+.covfill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+
+/* ── Right: Data Studio panel ── */
+.ds {
+  position: sticky; top: 36px;
+  background: #fff; border: 1px solid var(--line);
+  border-radius: 12px; overflow: hidden;
+  box-shadow: 0 14px 36px -20px rgba(0,0,0,0.22);
+}
+
+.ds-head {
+  padding: 16px 18px 14px;
+  background: var(--green-dark); color: #fff;
+}
+.ds-head .ek {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.09em;
+  text-transform: uppercase; opacity: 0.7;
+}
+.ds-head .nm { font-size: 20px; font-weight: 700; margin: 5px 0 2px; letter-spacing: -0.01em; }
+.ds-head .meta { font-size: 11px; opacity: 0.82; }
+
+.ds-conf {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px; border-bottom: 1px solid var(--line-2);
+}
+.ring {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center; position: relative; flex-shrink: 0;
+}
+.ring::after {
+  content: ""; position: absolute; inset: 6px;
+  background: #fff; border-radius: 50%;
+}
+.ring .v { position: relative; z-index: 1; font-size: 13px; font-weight: 700; }
+.ds-conf .lab { font-size: 11px; font-weight: 700; }
+.ds-conf .s   { font-size: 10.5px; color: var(--ink-3); margin-top: 1px; }
+
+.ds-sec { padding: 13px 18px; border-bottom: 1px solid var(--line-2); }
+.ds-sec .sh {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 9px;
+}
+.ds-sec .sh .t {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.ds-sec .sh .fixed {
+  font-size: 8.5px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--ink-3);
+  background: var(--line-2); padding: 2px 7px; border-radius: 100px;
+}
+
+.srow { display: flex; align-items: center; gap: 9px; padding: 4px 0; }
+.srow .sd { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.srow .sn { font-size: 11.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srow .scov { font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.srow .lk { color: var(--ink-4); font-size: 10px; flex-shrink: 0; }
+
+.ds-shared-note {
+  font-size: 10px; color: var(--ink-3); line-height: 1.5;
+  padding: 10px 18px;
+}
+
+.ds-cta { padding: 14px 18px; }
+.ds-open {
+  display: block; width: 100%;
+  font-family: inherit; font-size: 14px; font-weight: 700;
+  color: #fff; background: var(--green-dark);
+  padding: 13px; border-radius: 8px; border: none;
+  cursor: pointer; text-align: center;
+  transition: background 0.15s, transform 0.1s;
+}
+.ds-open:hover { background: #3a4f41; }
+.ds-open:active { transform: scale(0.99); }
+.ds-method {
+  text-align: center; font-size: 11px;
+  color: var(--ink-3); margin-top: 9px;
+}
+.ds-method a { color: var(--green-dark); font-weight: 700; text-decoration: none; }
+.ds-method a:hover { text-decoration: underline; }
+
+/* hidden class for search filtering */
+.mcard.hidden { display: none; }
+.group-hidden { display: none; }
+
+/* ============================================================
+ * Responsive — tablet & phone
+ * ============================================================ */
+@media (max-width: 860px) {
+  .inner {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 28px 24px 64px;
+  }
+  .ds { position: static; }
+  .search { max-width: none; }
+}
+
+@media (max-width: 520px) {
+  .app-header { padding: 0 14px; height: 52px; }
+  .body { height: calc(100vh - 52px); }
+  .brand { gap: 10px; }
+  .brand-divider,
+  .brand-product { display: none; }
+  .brand-wordmark { font-size: 12px; letter-spacing: 0.12em; }
+  .action-meta { display: none; }
+  .login-btn { padding: 11px 14px; }
+  .inner { padding: 20px 16px 56px; gap: 24px; }
+  .eyebrow { font-size: 10px; }
+  .h1 { font-size: 24px; margin: 7px 0 6px; }
+  .sub { font-size: 13px; }
+  .sub br { display: none; }
+  .grid { grid-template-columns: 1fr; }
+  .mcard { padding: 14px 16px; }
+  .mcard-desc { min-height: 0; }
+  .group-head { margin: 22px 0 10px; }
+}
+
+/* ── Password Modal ── */
+#password-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+#password-overlay.hidden {
+  display: none;
+}
+
+.password-modal {
+  background: white;
+  border-radius: 12px;
+  padding: 48px 40px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.password-modal h1 {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--ink);
+}
+
+.password-modal p {
+  font-size: 14px;
+  color: var(--ink-3);
+  margin-bottom: 28px;
+  line-height: 1.5;
+}
+
+.password-modal input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 20px;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.password-modal input:focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(110, 146, 119, 0.1);
+}
+
+.password-modal button {
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--green);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.password-modal button:hover {
+  background: var(--green-dark);
+}
+
+.password-modal button:active {
+  transform: scale(0.98);
+}
+
+.password-error {
+  color: var(--red);
+  font-size: 13px;
+  margin-bottom: 16px;
+  display: none;
+}
+
+.password-error.show {
+  display: block;
+}
+
+#main-content {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#main-content.locked {
+  filter: blur(3px);
+  pointer-events: none;
+}
+
+/* Selected Market Banner — mobile only */
+#sel-market-banner {
+  display: none !important;
+}
+
+@media (max-width: 860px) {
+  #sel-market-banner:not([style*="display:none"]) {
+    display: block !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- Password Modal -->
+<div id="password-overlay">
+  <div class="password-modal">
+    <h1>Access Required</h1>
+    <p>Enter the password to continue.</p>
+    <div class="password-error" id="password-error"></div>
+    <input type="password" id="password-input" placeholder="Password" autocomplete="off" />
+    <button id="password-submit">Unlock</button>
+  </div>
+</div>
+
+<div id="main-content" style="display:flex; flex-direction:column; height:100vh;" class="locked">
+
+  <!-- Header — matches index.html app-header -->
+  <header class="app-header">
+    <a class="brand" href="index.html">
+      <span class="brand-mark">FH</span>
+      <span class="brand-divider"></span>
+      <span class="brand-wordmark">FOUNDRY HEALTH</span>
+      <span class="brand-product">Intelligence Platform</span>
+    </a>
+    <div class="actions">
+      <span class="action-meta">Data vintage · Mar 2025</span>
+      <button class="login-btn" id="login-btn">Login</button>
+    </div>
+  </header>
+
+  <!-- Body -->
+  <div class="body">
+    <div class="inner">
+
+      <!-- LEFT: market picker -->
+      <div>
+        <!-- Selected market featured card (hidden until a market is selected) -->
+        <div id="sel-market-banner" style="display:none; background:var(--green-dark,#465E4D); border-radius:10px; padding:16px 18px 18px; margin-bottom:22px; color:#fff;">
+          <div style="font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; opacity:.65; margin-bottom:10px;">Selected market</div>
+          <div style="display:flex; align-items:center; gap:11px; margin-bottom:14px;">
+            <div id="smb-ic" style="width:36px; height:36px; border-radius:8px; background:rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0;">GP</div>
+            <div>
+              <div id="smb-name" style="font-size:17px; font-weight:700; letter-spacing:-.01em; line-height:1.1;">General Practice</div>
+              <div id="smb-meta" style="font-size:11px; opacity:.7; margin-top:3px;">336 regions · 100% coverage</div>
+            </div>
+          </div>
+          <a id="smb-link" href="map.html" style="display:block; text-align:center; background:#fff; color:var(--green-dark,#465E4D); font-size:13px; font-weight:700; padding:10px 16px; border-radius:6px; text-decoration:none;">Open map →</a>
+        </div>
+        <div class="eyebrow">Foundry Intelligence</div>
+        <div class="h1">Select a market</div>
+        <div class="sub">Each market is scored region-by-region from the data sources on the right.<br>Open one to explore the map.</div>
+
+        <div class="search">
+          <span class="mag">⌕</span>
+          <input type="text" id="search-input" placeholder="Search markets, regions or clinics…" autocomplete="off" />
+          <span class="kbd">⌘K</span>
+        </div>
+
+        <div id="groups-container"></div>
+      </div>
+
+      <!-- RIGHT: data studio panel -->
+      <div id="ds-panel">
+        <!-- Populated by JS -->
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+// ── Password Protection ──
+// Change this password on the line below to set your demo password
+const APP_PASSWORD = 'demo123';
+
+(function() {
+  const overlay = document.getElementById('password-overlay');
+  const mainContent = document.getElementById('main-content');
+  const input = document.getElementById('password-input');
+  const button = document.getElementById('password-submit');
+  const errorDiv = document.getElementById('password-error');
+
+  function unlockApp() {
+    sessionStorage.setItem('appUnlocked', 'true');
+    overlay.classList.add('hidden');
+    mainContent.classList.remove('locked');
+    input.value = '';
+    errorDiv.classList.remove('show');
+  }
+
+  function showError(msg) {
+    errorDiv.textContent = msg;
+    errorDiv.classList.add('show');
+    input.focus();
+    input.select();
+  }
+
+  function checkPassword() {
+    const enteredPassword = input.value;
+    if (enteredPassword === APP_PASSWORD) {
+      unlockApp();
+    } else {
+      showError('Incorrect password. Try again.');
+    }
+  }
+
+  // Check if already unlocked
+  if (sessionStorage.getItem('appUnlocked')) {
+    unlockApp();
+  } else {
+    input.focus();
+  }
+
+  // Event listeners
+  button.addEventListener('click', checkPassword);
+  input.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') checkPassword();
+  });
+})();
+
+const MARKETS = [
+  { ab:"GP",   n:"General Practice",    grp:"Primary & allied",          st:"live", regions:336, cov:100, desc:"Clinics, catchments & GP supply",       appMarket:"gp",
+    sources:[["GP roster · corporate",99],["GP roster · independent",21],["Clinic locations",86],["Medicare MBS billing",93]] },
+  { ab:"PHY",  n:"Physiotherapy",       grp:"Primary & allied",          st:"live", regions:318, cov:100, desc:"Practices & allied-health supply",       appMarket:"physio",
+    sources:[["Practice locations",100]] },
+  { ab:"PSY",  n:"Psychology",          grp:"Primary & allied",          st:"beta", regions:0,   cov:0,   desc:"Mental-health provider density",          appMarket:null,
+    sources:[] },
+  { ab:"OPT",  n:"Optometry",           grp:"Primary & allied",          st:"beta", regions:0,   cov:0,   desc:"Eyecare retail & clinical",              appMarket:null,
+    sources:[] },
+
+  { ab:"RAD",  n:"Diagnostic Imaging",  grp:"Diagnostics & specialist",  st:"beta", regions:0,   cov:0,   desc:"Radiology & imaging sites",             appMarket:null,
+    sources:[] },
+  { ab:"CARD", n:"Cardiology",          grp:"Diagnostics & specialist",  st:"beta", regions:0,   cov:0,   desc:"Specialist cardiac clinics",             appMarket:null,
+    sources:[] },
+  { ab:"RONC", n:"Radiation Oncology",  grp:"Diagnostics & specialist",  st:"beta", regions:0,   cov:0,   desc:"Linac sites & cancer centres",           appMarket:null,
+    sources:[] },
+
+  { ab:"DEN",  n:"Dental",              grp:"Dental & oral",             st:"beta", regions:0,   cov:0,   desc:"General & specialist dental",            appMarket:"dental",
+    sources:[] },
+  { ab:"ORTH", n:"Orthodontics",        grp:"Dental & oral",             st:"beta", regions:0,   cov:0,   desc:"Ortho-specific practices",               appMarket:null,
+    sources:[] },
+];
+
+const SHARED = [
+  ["Drive-time catchments",100],["SA2 / SA3 boundaries",100],
+  ["Modified Monash Model",100],["SEIFA (IRSD + IER)",100],
+  ["Resident population & growth",100],["Commercial rent / m²",71],
+];
+
+const GROUPS = ["Primary & allied","Diagnostics & specialist","Dental & oral"];
+
+function covColor(c) {
+  return c >= 80 ? "var(--green)" : c >= 50 ? "var(--amber)" : "var(--red)";
+}
+
+// Restore last selected market from localStorage — only live markets are selectable
+const savedMarket = localStorage.getItem("fh_last_market");
+const savedIsLive = savedMarket && MARKETS.find(m => m.ab === savedMarket && m.st === "live");
+let selectedAb = savedIsLive ? savedMarket : "GP";
+
+function renderGroups(filterText) {
+  const q = (filterText || "").toLowerCase().trim();
+  const container = document.getElementById("groups-container");
+  let html = "";
+
+  GROUPS.forEach(grp => {
+    const items = MARKETS.filter(m => m.grp === grp);
+    const visible = items.filter(m =>
+      !q || m.n.toLowerCase().includes(q) || m.ab.toLowerCase().includes(q) || m.desc.toLowerCase().includes(q)
+    );
+    if (visible.length === 0) return;
+
+    html += `<div class="group-head">
+      <span class="t">${grp}</span><span class="ln"></span><span class="ct">${visible.length}</span>
+    </div><div class="grid">`;
+
+    items.forEach(m => {
+      const isLive = m.st === "live";
+      const isSel = isLive && m.ab === selectedAb;
+      const isHidden = q && !visible.includes(m);
+      html += `
+        <div class="mcard ${m.st} ${isSel ? "sel" : ""} ${isHidden ? "hidden" : ""}"
+             data-ab="${m.ab}" role="${isLive ? "button" : "presentation"}" ${isLive ? 'tabindex="0"' : ''}>
+          <div class="mcard-top">
+            <div class="mcard-ic">${m.ab}</div>
+            <span class="st ${m.st}">${m.st === "live" ? "Live" : "Beta"}</span>
+          </div>
+          <div class="mcard-nm">${m.n}</div>
+          <div class="mcard-desc">${m.desc}</div>
+          <div class="mcard-foot">
+            ${isLive
+              ? `<span class="stat"><b>${m.regions}</b> regions · <b>${m.cov}%</b> coverage</span>
+                 <span class="sel-lbl" style="color:${isSel ? "var(--green-dark)" : "var(--ink-4)"}">${isSel ? "Selected" : "Select"}</span>`
+              : `<span class="stat" style="color:var(--ink-4)">Coming soon</span>`}
+          </div>
+          <div class="covbar"><div class="covfill" style="width:${isLive ? m.cov : 0}%;background:${covColor(m.cov)}"></div></div>
+        </div>`;
+    });
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+
+  // Wire card clicks — live markets only
+  container.querySelectorAll(".mcard.live").forEach(card => {
+    const activate = () => {
+      selectedAb = card.dataset.ab;
+      localStorage.setItem("fh_last_market", selectedAb);
+      renderGroups(document.getElementById("search-input").value);
+      renderPanel();
+    };
+    card.addEventListener("click", activate);
+    card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") activate(); });
+  });
+}
+
+function renderPanel() {
+  const m = MARKETS.find(x => x.ab === selectedAb);
+  if (!m) return;
+  // Update the selected-market featured card at the top of the market list
+  const smb = document.getElementById('sel-market-banner');
+  if (smb) {
+    smb.style.display = '';
+    const smbIc = document.getElementById('smb-ic'); if (smbIc) smbIc.textContent = m.ab;
+    const smbNm = document.getElementById('smb-name'); if (smbNm) smbNm.textContent = m.n;
+    const smbMeta = document.getElementById('smb-meta'); if (smbMeta) smbMeta.textContent = `${m.regions} regions · ${m.cov}% coverage`;
+    const smbLink = document.getElementById('smb-link'); if (smbLink) smbLink.href = `map.html?market=${m.appMarket || m.ab.toLowerCase()}`;
+  }
+  const panel = document.getElementById("ds-panel");
+
+  const conf = m.cov;
+  const srcRows = m.sources.map(s => `
+    <div class="srow">
+      <span class="sd" style="background:${covColor(s[1])}"></span>
+      <span class="sn">${s[0]}</span>
+      <span class="scov" style="color:${covColor(s[1])}">${s[1]}%</span>
+    </div>`).join("");
+
+  const sharedRows = SHARED.slice(0, 4).map(s => `
+    <div class="srow">
+      <span class="sd" style="background:${covColor(s[1])}"></span>
+      <span class="sn">${s[0]}</span>
+      <span class="lk">🔒</span>
+    </div>`).join("");
+
+  const isLive = m.st === "live";
+
+  panel.innerHTML = `
+    <div class="ds">
+      <div class="ds-head">
+        <div class="ek">${isLive ? "Open this market" : "Coming soon"}</div>
+        <div class="nm">${m.n}</div>
+        <div class="meta">${isLive ? `${m.regions} regions scored · data vintage Mar 2025` : "In development · not yet available"}</div>
+      </div>
+
+      ${isLive ? `
+      <div class="ds-conf">
+        <div class="ring" style="background:conic-gradient(${covColor(conf)} 0 ${conf}%, var(--line-2) ${conf}% 100%)">
+          <span class="v">${conf}</span>
+        </div>
+        <div>
+          <div class="lab">Model confidence</div>
+          <div class="s">Weighted source coverage for ${m.n}</div>
+        </div>
+      </div>
+
+      <div class="ds-sec">
+        <div class="sh"><span class="t">${m.n} data</span></div>
+        ${srcRows}
+      </div>
+
+      <div class="ds-sec">
+        <div class="sh">
+          <span class="t">Shared data</span>
+          <span class="fixed">🔒 Always included</span>
+        </div>
+        ${sharedRows}
+        <div class="ds-shared-note">+ ${SHARED.length - 4} more reference layers, common to every market.</div>
+      </div>
+
+      <div class="ds-cta">
+        <button class="ds-open" id="open-btn">Open ${m.n} map →</button>
+        <div class="ds-method">How scores are built · <a href="methodology.html?market=${m.appMarket || 'gp'}">Methodology</a></div>
+      </div>
+      ` : `
+      <div style="padding: 32px 18px; text-align: center; color: var(--ink-3);">
+        <div style="font-size: 32px; margin-bottom: 12px;">🔜</div>
+        <div style="font-size: 14px; font-weight: 600; color: var(--ink-2); margin-bottom: 8px;">${m.n}</div>
+        <div style="font-size: 12px; line-height: 1.6;">This market is currently in beta and not yet available. Check back soon.</div>
+      </div>
+      `}
+    </div>`;
+
+  const openBtn = document.getElementById("open-btn");
+  if (openBtn && m.appMarket) {
+    openBtn.addEventListener("click", () => {
+      window.location.href = `map.html?market=${m.appMarket}`;
+    });
+  }
+}
+
+// Search
+document.getElementById("search-input").addEventListener("input", e => {
+  renderGroups(e.target.value);
+});
+
+// ⌘K focuses search
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    e.preventDefault();
+    document.getElementById("search-input").focus();
+  }
+});
+
+// Login button → go to app with login intent
+document.getElementById("login-btn").addEventListener("click", () => {
+  window.location.href = "map.html?login=1";
+});
+
+// Initial render
+renderGroups();
+renderPanel();
+</script>
+</body>
+</html>
