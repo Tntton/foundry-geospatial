@@ -436,17 +436,29 @@ function getFileUrl(filename) {
 // get_clinic_isochrone RPC definitions this relies on.
 // ============================================================
 
+// The DATA project (where clinics/sa3/sa2/sa1/markets live) is a SEPARATE Supabase
+// project from the one map.html uses for auth (window.supabase_client) -- don't
+// reuse that client, it points at the wrong project and has none of this schema.
+// This key is the public/publishable anon key, safe to embed in client code (same
+// category as the Mapbox pk. token) -- not a secret.
+const DATA_SUPABASE_URL = 'https://ytervdshmvdawoomhnlp.supabase.co';
+const DATA_SUPABASE_ANON_KEY = 'sb_publishable_3cXEeYAJg3u3CX_j8ITJQg_jLLPouw-';
+
+let _dataSupabaseClient = null;
 function getSupabaseClient() {
-    // Reuses the client map.html already creates for auth (window.supabase_client) --
-    // don't create a second client instance. Script-tag order already makes this
-    // reliably available in practice; this poll is just a cheap safety net.
     return new Promise((resolve) => {
-        if (window.supabase_client) return resolve(window.supabase_client);
-        const interval = setInterval(() => {
-            if (window.supabase_client) {
-                clearInterval(interval);
-                resolve(window.supabase_client);
+        const tryCreate = () => {
+            if (_dataSupabaseClient) { resolve(_dataSupabaseClient); return true; }
+            if (window.supabase && window.supabase.createClient) {
+                _dataSupabaseClient = window.supabase.createClient(DATA_SUPABASE_URL, DATA_SUPABASE_ANON_KEY);
+                resolve(_dataSupabaseClient);
+                return true;
             }
+            return false;
+        };
+        if (tryCreate()) return;
+        const interval = setInterval(() => {
+            if (tryCreate()) clearInterval(interval);
         }, 50);
     });
 }
