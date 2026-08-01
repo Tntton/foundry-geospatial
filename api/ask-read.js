@@ -56,7 +56,13 @@ export default async function handler(req, res) {
         return;
     }
 
-    if (!process.env.AI_GATEWAY_API_KEY) {
+    // Auth: an explicit AI_GATEWAY_API_KEY (if set) takes priority; otherwise
+    // the AI SDK automatically falls back to this Vercel deployment's own
+    // OIDC token (VERCEL_OIDC_TOKEN, auto-populated on every Vercel
+    // deployment, scoped to the project's own team/plan — no key to manage).
+    // Only bail out early if genuinely neither is available (e.g. running
+    // locally outside `vercel dev`/`vercel env pull`).
+    if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
         res.status(500).json({ error: 'Server is not configured for live answers yet.' });
         return;
     }
