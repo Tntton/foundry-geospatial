@@ -17,15 +17,7 @@
 
 import { generateText } from 'ai';
 
-// TEMP DEBUG MODEL — swapped from 'anthropic/claude-haiku-4.5' because the
-// Gateway account has no paid credits yet ("Free tier users do not have
-// access to this model"). This is a genuinely $0 model (Ling 3.0 Flash via
-// Novita, verified against the live /v1/models/{creator}/{model}/endpoints
-// response) used only to confirm the frontend → function → Gateway → answer
-// pipeline works end-to-end. Quality/reliability for grounded short-answer
-// Q&A is unverified — switch back to Claude Haiku 4.5 once AI Gateway
-// credits are added (see plan Phase 6 addendum).
-const MODEL = 'inclusionai/ling-3.0-flash-free';
+const MODEL = 'anthropic/claude-haiku-4.5';
 const MAX_QUESTION_CHARS = 300;
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_OUTPUT_TOKENS = 250;
