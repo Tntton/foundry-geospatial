@@ -96,7 +96,9 @@ const State = {
     activeClinicId: null,
     activeClinicIsochrone: null,
     selectedClinics: [],
-    comparisonIsochrones: {}
+    comparisonIsochrones: {},
+    acquisitionReads: {},   // clinic_id -> { phase: 'idle'|'loading'|'result', collapsed, thread: [] }
+    regionReads: {}         // SA3Code  -> { phase: 'idle'|'loading'|'result', thread: [] }
 };
 
 // ============================================================
@@ -393,6 +395,38 @@ function fmtMoney(v) {
 function parseNum(v) {
     if (v === undefined || v === null || v === '') return NaN;
     return parseFloat(String(v).replace(/[$%,\s]/g, ''));
+}
+
+// Escapes a value for safe interpolation inside a single-quoted inline
+// onclick="...('...')" attribute string.
+function escJsAttr(v) {
+    return String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+// Live follow-up Q&A (Acquisition/Region read) — the one part of that
+// feature that calls a real model (api/ask-read.js, Claude Haiku 4.5). The
+// four-dimension scorecard itself stays a deterministic heuristic; see
+// plan Phase 6. `context` is exactly the already-computed read result
+// (computeAcquisitionRead/computeRegionRead output) — no re-derivation.
+async function fetchLiveAnswer(scope, question, context) {
+    try {
+        const res = await fetch('/api/ask-read', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ scope, question, context })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.answer) return { ok: false, text: data.error || "Couldn't reach the model just now — try again." };
+        return { ok: true, text: data.answer };
+    } catch (e) {
+        return { ok: false, text: "Couldn't reach the model just now — try again." };
+    }
+}
+
+function fmtStamp(d) {
+    if (!d) return '';
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function getProp(raw, ...keys) {
@@ -2816,6 +2850,20 @@ function renderDrawer(feature) {
     const oppCopy = buildOpportunityNote(counts, tier, p);
     const totalMix = (counts.corporate || 0) + (counts.independent || 0) + (counts.publicngo || 0);
 
+    // Region read — real clinics in this SA3 (candidate sites + asset-quality dim)
+    const regionReadTargetCode = String(p.SA3Code || '').trim();
+    const sa3Clinics = State.clinicsData.filter(c => {
+        const cc = String(c.sa3_code || c.SA3_code || c.SA3Code || '').trim().replace(/\.\d+$/, '');
+        return cc === regionReadTargetCode;
+    });
+    const showRegionRead = State.markets.current === 'gp' && counts.total > 0;
+    if (showRegionRead) {
+        if (!State.regionReads[p.SA3Code]) {
+            State.regionReads[p.SA3Code] = { phase: 'idle', thread: [] };
+        }
+        State.regionReads[p.SA3Code].ctx = { p, counts, tier, composite, competition, sa3Clinics };
+    }
+
     const html = `
         <button class="btn-icon drawer-close" onclick="closeDrawer()" aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -2869,6 +2917,10 @@ function renderDrawer(feature) {
                 ${renderScoreBar('Economics', economics, 'economics')}
             </div>
         </div>
+
+        ${showRegionRead ? `<div class="drawer-section" id="region-read-${p.SA3Code}">
+            ${buildRegionReadHTML(p.SA3Code)}
+        </div>` : ''}
 
         <div class="drawer-section">
             <div class="drawer-section-title drawer-section-collapsible" onclick="toggleDrawerSection(this)">
@@ -3186,6 +3238,296 @@ function buildOpportunityNote(counts, tier, props) {
         return `Limited consolidation runway — ${indep} independent practices. Deprioritise under base-case allocation.`;
     }
     return `${indep} independent practices in market. Score profile suggests caution.`;
+}
+
+// ============================================================
+// Region read — SA3-level heuristic "AI read" (same pattern/rationale
+// as computeAcquisitionRead, scored at region level instead of clinic
+// level). See plan Phase 5. All numbers below come from data already
+// computed in renderDrawer() — no new queries, no fabricated figures.
+// ============================================================
+function computeRegionRead(p, counts, tier, composite, competition, sa3Clinics) {
+    const dim = (name, rating, why, field) => ({ name, rating, ...RD_RATING_STYLE[rating], why, field });
+    const total = counts.total || 0;
+
+    // Deliverability — share of independently-owned (acquirable) sites
+    let deliverability;
+    if (total === 0) {
+        deliverability = dim('Deliverability', 'Unrated', 'No clinics on file for this region.', 'total=0');
+    } else {
+        const indepPct = (counts.independent || 0) / total;
+        const pctLabel = Math.round(indepPct * 100);
+        if (indepPct >= 0.5) {
+            deliverability = dim('Deliverability', 'High', `${counts.independent} of ${total} tracked clinics (${pctLabel}%) are independently owned — acquirable without a corporate carve-out.`, `own_independent=${counts.independent}/${total}`);
+        } else if (indepPct >= 0.25) {
+            deliverability = dim('Deliverability', 'Med', `${counts.independent} of ${total} tracked clinics (${pctLabel}%) are independent; the rest sit with corporate groups.`, `own_independent=${counts.independent}/${total}`);
+        } else {
+            deliverability = dim('Deliverability', 'Low', `Only ${counts.independent} of ${total} tracked clinics (${pctLabel}%) are independent — the obvious roll-up may already be run by someone else.`, `own_independent=${counts.independent}/${total}`);
+        }
+    }
+
+    // Asset quality — share of scale sites (GP market: gp_count >= 6) among classified sites
+    const knownGp = (sa3Clinics || []).filter(c => c.gp_count != null && c.gp_count !== '' && !isNaN(parseFloat(c.gp_count)));
+    const scaleSites = knownGp.filter(c => parseFloat(c.gp_count) >= 6);
+    let assetQuality;
+    if (knownGp.length === 0) {
+        assetQuality = dim('Asset quality', 'Unrated', 'No clinics in this region have a recorded GP headcount.', 'gp_count_known=0');
+    } else {
+        const scaleRatio = scaleSites.length / knownGp.length;
+        if (scaleRatio >= 0.25) {
+            assetQuality = dim('Asset quality', 'High', `${scaleSites.length} of ${knownGp.length} classified sites reach 6+ GPs — a genuine anchor tail.`, `scale_sites=${scaleSites.length}/${knownGp.length}`);
+        } else if (scaleRatio >= 0.1) {
+            assetQuality = dim('Asset quality', 'Med', `${scaleSites.length} of ${knownGp.length} classified sites reach 6+ GPs — a thin but present tail.`, `scale_sites=${scaleSites.length}/${knownGp.length}`);
+        } else {
+            assetQuality = dim('Asset quality', 'Low', `Only ${scaleSites.length} of ${knownGp.length} classified sites reach 6+ GPs — the tail is too thin to anchor a platform.`, `scale_sites=${scaleSites.length}/${knownGp.length}`);
+        }
+    }
+
+    // Platform potential — regional composite/tier
+    let platformPotential;
+    if (tier <= 2) {
+        platformPotential = dim('Platform potential', 'High', `${TIER_LABELS[tier]}, composite ${Math.round(composite)} — the regional fundamentals support a build.`, `composite=${Math.round(composite)}`);
+    } else if (tier === 3) {
+        platformPotential = dim('Platform potential', 'Med', `${TIER_LABELS[tier]}, composite ${Math.round(composite)} — moderate fundamentals.`, `composite=${Math.round(composite)}`);
+    } else {
+        platformPotential = dim('Platform potential', 'Low', `${TIER_LABELS[tier]}, composite ${Math.round(composite)} — below the bar this platform underwrites against.`, `composite=${Math.round(composite)}`);
+    }
+
+    // Strategic fit — the app's own competition-dimension score (0-100; higher = less saturated / more favourable)
+    let strategicFit;
+    const compRounded = Math.round(competition);
+    if (compRounded >= 60) {
+        strategicFit = dim('Strategic fit', 'High', `Competition scores ${compRounded}/100 — open field relative to Foundry's own methodology.`, `competition_score=${compRounded}`);
+    } else if (compRounded >= 40) {
+        strategicFit = dim('Strategic fit', 'Med', `Competition scores ${compRounded}/100 — workable but not wide open.`, `competition_score=${compRounded}`);
+    } else {
+        strategicFit = dim('Strategic fit', 'Low', `Competition scores ${compRounded}/100 — the region is already well served.`, `competition_score=${compRounded}`);
+    }
+
+    const dims = [deliverability, assetQuality, platformPotential, strategicFit];
+    const ratings = dims.map(d => d.rating);
+    const highCount = ratings.filter(r => r === 'High').length;
+    const lowCount = ratings.filter(r => r === 'Low').length;
+    const unratedCount = ratings.filter(r => r === 'Unrated').length;
+
+    // A single Unrated dimension withholds a full "Build case" — same rationale
+    // as the clinic-level read: don't claim confidence in a dimension that's
+    // genuinely unknown, not just unfavourable.
+    let verdict, verdictDot;
+    if (unratedCount >= 2) {
+        verdict = 'Provisional · limited data'; verdictDot = '#BFBFBF';
+    } else if (lowCount >= 3) {
+        verdict = 'Deprioritise'; verdictDot = '#C00000';
+    } else if (unratedCount === 1) {
+        verdict = 'No platform case · bolt-ons only'; verdictDot = '#E0A800';
+    } else if (platformPotential.rating !== 'Low' && strategicFit.rating !== 'Low' && highCount >= 2) {
+        verdict = 'Build case'; verdictDot = '#6E9277';
+    } else {
+        verdict = 'No platform case · bolt-ons only'; verdictDot = '#E0A800';
+    }
+    const verdictStyle = {
+        'Build case': { bg: '#E8EFE9', fg: '#2F4636' },
+        'No platform case · bolt-ons only': { bg: '#FFF2CC', fg: '#8A6500' },
+        'Deprioritise': { bg: '#FCE4E4', fg: '#A81111' },
+        'Provisional · limited data': { bg: '#F1F1EE', fg: '#5A5A55' }
+    }[verdict];
+
+    const narrative = [
+        { tone: deliverability.rating === 'Low' ? 'warn' : 'normal', strong: 'Ownership & acquirability.', text: deliverability.why },
+        { tone: assetQuality.rating === 'Low' ? 'warn' : 'normal', strong: 'Anchor scale.', text: assetQuality.why },
+        { tone: (platformPotential.rating === 'Low' || strategicFit.rating === 'Low') ? 'warn' : 'normal', strong: 'Regional fundamentals.', text: `${platformPotential.why} ${strategicFit.why}` }
+    ];
+    const recText = {
+        'Build case': `Build here. Sequence outreach starting with the largest classified sites (see candidates below).`,
+        'No platform case · bolt-ons only': 'Bolt-ons only. Hold this region as feeder supply for a stronger adjacent SA3 rather than a standalone build.',
+        'Deprioritise': 'Deprioritise. Multiple dimensions are unfavourable under base-case allocation.',
+        'Provisional · limited data': 'Enrich before screening. Too little classified data to size a platform case here.'
+    }[verdict];
+    narrative.push({ tone: verdict === 'Build case' ? 'good' : (verdict === 'Provisional · limited data' ? 'normal' : 'warn'), strong: 'Recommendation.', text: recText });
+
+    // Candidate sites — real clinics in this SA3, ranked by GP headcount (no fabricated
+    // ownership-group linkage; that relationship isn't tracked in this dataset)
+    const candidateSites = (sa3Clinics || [])
+        .slice()
+        .sort((a, b) => (parseFloat(b.gp_count) || -1) - (parseFloat(a.gp_count) || -1))
+        .slice(0, 3)
+        .map(c => {
+            const gp = c.gp_count != null && c.gp_count !== '' ? parseFloat(c.gp_count) : null;
+            const tag = gp == null ? { label: 'ENRICH', bg: '#F1F1EE', fg: '#5A5A55' }
+                : gp >= 8 ? { label: 'ANCHOR', bg: '#C5E0B3', fg: '#2F4636' }
+                : gp >= 4 ? { label: 'BOLT-ON', bg: '#FFF2CC', fg: '#8A6500' }
+                : { label: 'SMALL', bg: '#F1F1EE', fg: '#5A5A55' };
+            return {
+                name: c.clinic_name || c.name || 'Unnamed clinic',
+                meta: `${gp != null ? gp + ' GPs' : 'GP count unknown'} · ${c.ownership || 'Unclassified owner'}`,
+                tag: tag.label, tagBg: tag.bg, tagFg: tag.fg
+            };
+        });
+
+    const chips = [
+        {
+            label: 'What would flip this to a build case?',
+            answer: `Platform potential and Strategic fit both need to clear "Med" — that means composite above ~60 (currently ${Math.round(composite)}) and a competition score above ~40 (currently ${compRounded}). On the region's current trajectory neither is guaranteed to move without new supply data or a competitor exit.`
+        },
+        {
+            label: 'How concentrated is ownership here?',
+            answer: `${counts.corporate || 0} of ${total} tracked clinics are corporate-owned, ${counts.independent || 0} independent, ${counts.publicngo || 0} public/NGO. See the Archetype mix section below for the full format/billing/ownership breakdown.`
+        }
+    ];
+
+    return { dims, verdict, verdictBg: verdictStyle.bg, verdictFg: verdictStyle.fg, verdictDot, narrative, candidateSites, chips };
+}
+
+function buildRegionReadHTML(sa3Code) {
+    const st = State.regionReads[sa3Code];
+    if (!st || !st.ctx) return '';
+    const idAttr = escJsAttr(sa3Code);
+
+    const headActions = (st.phase === 'result')
+        ? `<button class="rd-link-btn" onclick="regionReadGenerate('${idAttr}')">Regenerate</button>`
+        : '';
+
+    let body = '';
+    if (!st.phase || st.phase === 'idle') {
+        body = `
+            <div style="font-size:12px;color:var(--muted);line-height:1.45;margin-bottom:12px">Ask whether this region warrants a platform build — and which of its ${st.ctx.counts.total || 0} clinics carry the case. Same four dimensions, scored at SA3 level.</div>
+            <button class="rd-generate-btn" onclick="regionReadGenerate('${idAttr}')">Generate read</button>
+        `;
+    } else if (st.phase === 'loading') {
+        body = `
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span class="rd-blink-dot"></span><span style="font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--sage-deep)">Reading region and ${st.ctx.counts.total || 0} clinic records…</span></div>
+            <div class="rd-shim" style="height:22px;width:56%;margin-bottom:12px"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+                <div class="rd-shim" style="height:56px"></div><div class="rd-shim" style="height:56px"></div>
+                <div class="rd-shim" style="height:56px"></div><div class="rd-shim" style="height:56px"></div>
+            </div>
+            <div class="rd-shim" style="height:10px;margin-bottom:6px"></div>
+            <div class="rd-shim" style="height:10px;width:80%"></div>
+        `;
+    } else if (st.phase === 'result' && st.result) {
+        const read = st.result;
+        body = `
+            <div class="rd-fadein">
+                <div class="rd-verdict-badge" style="background:${read.verdictBg};color:${read.verdictFg}"><span class="rd-verdict-dot" style="background:${read.verdictDot}"></span>${read.verdict}</div>
+                <div class="rd-dims-grid">
+                    ${read.dims.map(d => `
+                        <div class="rd-dim-card">
+                            <div class="rd-dim-card-head">
+                                <span class="rd-dim-name">${d.name}</span>
+                                <span class="rd-dim-rating" style="background:${d.bg};color:${d.fg}">${d.rating}</span>
+                            </div>
+                            <div class="rd-dim-why">${d.why}</div>
+                            <div class="rd-dim-field">${d.field}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="rd-narrative">
+                    ${read.narrative.map(n => `
+                        <div class="rd-narrative-row">
+                            <span class="rd-narrative-dot ${n.tone === 'warn' ? 'warn' : (n.tone === 'good' ? 'good' : '')}"></span>
+                            <div class="rd-narrative-text"><strong>${n.strong}</strong> ${n.text}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                ${read.candidateSites.length ? `
+                <div style="border:1px solid var(--hairline);border-radius:2px;background:#fff;margin-bottom:12px">
+                    <div style="display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--surface-2, #E6E6E1)">
+                        <span style="font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Candidate sites</span>
+                        <span style="margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--muted)">${read.candidateSites.length} of ${st.ctx.counts.total || 0}, by GP headcount</span>
+                    </div>
+                    ${read.candidateSites.map(s => `
+                        <div class="rr-site-row">
+                            <div style="min-width:0">
+                                <div class="rr-site-name">${s.name}</div>
+                                <div class="rr-site-meta">${s.meta}</div>
+                            </div>
+                            <span class="rr-site-tag" style="background:${s.tagBg};color:${s.tagFg}">${s.tag}</span>
+                        </div>
+                    `).join('')}
+                    <div style="padding:8px 11px;font-size:10px;color:var(--muted);line-height:1.4">Ranked by GP headcount only — ownership-group relationships between sites are not tracked in this dataset.</div>
+                </div>` : ''}
+                <div class="rd-stamp">
+                    <span>${fmtStamp(st.generatedAt)}</span><span>·</span><span>foundry-read v1</span><span>·</span><span>heuristic, not model-generated</span>
+                </div>
+                <div>
+                    <div class="rd-chips">
+                        ${read.chips.map((c, i) => `<button class="rd-chip" onclick="regionReadAskChip('${idAttr}', ${i})">${c.label}</button>`).join('')}
+                    </div>
+                    ${st.thread.map(t => `
+                        <div class="rd-thread-item rd-fadein">
+                            <div class="rd-thread-q">${t.q}</div>
+                            <div class="rd-thread-a">${t.pending ? '<span class="rd-blink-dot"></span> Thinking…' : t.a}</div>
+                            ${t.live && !t.pending ? '<div class="rd-live-tag">Model-generated — verify independently</div>' : ''}
+                        </div>
+                    `).join('')}
+                    <div class="rd-followup-row">
+                        <input class="rd-followup-input" id="region-read-draft-${idAttr}" placeholder="Ask a follow-up about this region…" onkeydown="if(event.key==='Enter') regionReadAskFreeform('${idAttr}')" />
+                        <button class="rd-followup-send" onclick="regionReadAskFreeform('${idAttr}')">↩</button>
+                    </div>
+                    <div class="rd-followup-note">Scored dimensions above are computed, not model-generated. Suggested questions reuse that computation instantly; free-form questions call a live model scoped to this SA3 only.</div>
+                </div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="rd-read-head">
+            <div class="rd-read-head-left">
+                <span class="drawer-section-title" style="border:none;padding:0;margin:0">Region read</span>
+                <span class="rd-ai-tag">AI</span>
+            </div>
+            ${headActions}
+        </div>
+        ${body}
+    `;
+}
+
+function renderRegionReadSection(sa3Code) {
+    const el = document.getElementById('region-read-' + sa3Code);
+    if (el) el.innerHTML = buildRegionReadHTML(sa3Code);
+}
+
+function regionReadGenerate(sa3Code) {
+    const st = State.regionReads[sa3Code];
+    if (!st || !st.ctx) return;
+    clearTimeout(st._timer);
+    st.phase = 'loading';
+    st.thread = [];
+    renderRegionReadSection(sa3Code);
+    st._timer = setTimeout(() => {
+        const ctx = st.ctx;
+        st.result = computeRegionRead(ctx.p, ctx.counts, ctx.tier, ctx.composite, ctx.competition, ctx.sa3Clinics);
+        st.phase = 'result';
+        st.generatedAt = new Date();
+        renderRegionReadSection(sa3Code);
+    }, 1600);
+}
+
+function regionReadAskChip(sa3Code, idx) {
+    const st = State.regionReads[sa3Code];
+    if (!st || !st.result) return;
+    const c = st.result.chips[idx];
+    if (!c) return;
+    st.thread.push({ q: c.label, a: c.answer });
+    renderRegionReadSection(sa3Code);
+}
+
+async function regionReadAskFreeform(sa3Code) {
+    const st = State.regionReads[sa3Code];
+    if (!st || !st.result) return;
+    const input = document.getElementById('region-read-draft-' + sa3Code);
+    if (!input) return;
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = '';
+    const entry = { q, a: '', live: false, pending: true };
+    st.thread.push(entry);
+    renderRegionReadSection(sa3Code);
+    const result = await fetchLiveAnswer('region', q, st.result);
+    entry.a = result.text;
+    entry.live = result.ok;
+    entry.pending = false;
+    renderRegionReadSection(sa3Code);
 }
 
 function renderDrawerEmpty() {
@@ -6688,6 +7030,335 @@ function getTierForScore(score) {
 }
 
 // ============================================================
+// Acquisition read — clinic-level heuristic "AI read"
+//
+// Deterministic, rule-based scorer (no LLM backend exists in this app).
+// Mirrors the visual/interaction language of the imported Claude Design
+// mockup ("Clinic Acquisition Read.dc.html") but every rating/number here
+// is computed from real fields already on the clinic/SA3/catchment,
+// never invented. See plan Phase 5 for rationale.
+// ============================================================
+const RD_RATING_STYLE = {
+    High:    { bg: '#C5E0B3', fg: '#2F4636' },
+    Med:     { bg: '#FFF2CC', fg: '#8A6500' },
+    Low:     { bg: '#FCE4E4', fg: '#A81111' },
+    Unrated: { bg: '#F1F1EE', fg: '#5A5A55' }
+};
+
+function computeAcquisitionRead(clinic, archetype, tierInfo, analytics, clinicsPerKm, nationalAvgDensity, sa3Counts) {
+    const market = State.markets.current;
+    const missing = [];
+    const dim = (name, rating, why, field) => ({ name, rating, ...RD_RATING_STYLE[rating], why, field });
+
+    // Deliverability — ownership structure
+    let deliverability;
+    if (!clinic.ownership) {
+        missing.push('ownership');
+        deliverability = dim('Deliverability', 'Unrated', 'Ownership not classified — cannot rule out a corporate parent or multi-site carve-out.', 'ownership=null');
+    } else if (clinic.ownership === 'Independent') {
+        deliverability = dim('Deliverability', 'High', 'Independent ownership, single site — no corporate carve-out complexity.', 'ownership=Independent');
+    } else if (clinic.ownership === 'Corporate') {
+        deliverability = dim('Deliverability', 'Low', 'Corporate-owned — likely requires a carve-out from a parent group, adding deal complexity.', 'ownership=Corporate');
+    } else {
+        deliverability = dim('Deliverability', 'Med', `Ownership recorded as ${clinic.ownership} — carve-out complexity not fully known.`, `ownership=${clinic.ownership}`);
+    }
+
+    // Asset quality — scale proxy (GP headcount for GP market, format elsewhere)
+    let assetQuality;
+    if (market === 'gp') {
+        const gpCount = clinic.gp_count != null && clinic.gp_count !== '' ? parseFloat(clinic.gp_count) : null;
+        if (gpCount == null || isNaN(gpCount)) {
+            missing.push('gp_count');
+            assetQuality = dim('Asset quality', 'Unrated', 'No GP headcount on file. Nothing to size the asset against.', 'gp_count=null');
+        } else if (gpCount >= 8) {
+            assetQuality = dim('Asset quality', 'High', `${archetype.format} format, ${gpCount} GPs identified (est. ${(gpCount * 0.75).toFixed(1)} FTE) — genuinely large for this market.`, `gp_count=${gpCount}`);
+        } else if (gpCount >= 4) {
+            assetQuality = dim('Asset quality', 'Med', `${gpCount} GPs identified (est. ${(gpCount * 0.75).toFixed(1)} FTE) — mid-sized for this market.`, `gp_count=${gpCount}`);
+        } else {
+            assetQuality = dim('Asset quality', 'Low', `Only ${gpCount} GP${gpCount === 1 ? '' : 's'} identified — below scale for a platform anchor.`, `gp_count=${gpCount}`);
+        }
+    } else {
+        const fmt = clinic.clinic_format;
+        if (!fmt || fmt === 'Unknown' || fmt === 'Unclassified') {
+            missing.push('format');
+            assetQuality = dim('Asset quality', 'Unrated', 'Format not classified. Nothing to size the asset against.', 'clinic_format=null');
+        } else if (fmt === 'Big-box') {
+            assetQuality = dim('Asset quality', 'High', 'Big-box format — the largest scale bracket tracked for this market.', `clinic_format=${fmt}`);
+        } else if (fmt === 'Mid-format') {
+            assetQuality = dim('Asset quality', 'Med', 'Mid-format site — moderate scale.', `clinic_format=${fmt}`);
+        } else {
+            assetQuality = dim('Asset quality', 'Low', `${fmt} format — below scale for a platform anchor.`, `clinic_format=${fmt}`);
+        }
+    }
+
+    // Platform potential — regional (SA3) composite/tier
+    let platformPotential;
+    if (tierInfo.tier <= 2) {
+        platformPotential = dim('Platform potential', 'High', `Sits in a ${tierInfo.label} region on Foundry's base-case composite.`, `tier=${tierInfo.tier}`);
+    } else if (tierInfo.tier === 3) {
+        platformPotential = dim('Platform potential', 'Med', `${tierInfo.label} region — moderate composite fundamentals.`, `tier=${tierInfo.tier}`);
+    } else {
+        platformPotential = dim('Platform potential', 'Low', `Sits in a ${tierInfo.label} region on Foundry's base-case composite.`, `tier=${tierInfo.tier}`);
+    }
+
+    // Strategic fit — competitive density vs national average
+    let strategicFit;
+    const densityRatio = (nationalAvgDensity > 0 && isFinite(clinicsPerKm)) ? clinicsPerKm / nationalAvgDensity : null;
+    if (densityRatio == null) {
+        missing.push('catchment density');
+        strategicFit = dim('Strategic fit', 'Unrated', 'Catchment density unavailable.', 'comp_density=null');
+    } else if (densityRatio < 1.5) {
+        strategicFit = dim('Strategic fit', 'High', `Catchment density ${clinicsPerKm.toFixed(2)} clinics/km² — near or below the ${nationalAvgDensity.toFixed(2)} national average, open field.`, `comp_density=${clinicsPerKm.toFixed(2)}`);
+    } else if (densityRatio < 4) {
+        strategicFit = dim('Strategic fit', 'Med', `Catchment density ${clinicsPerKm.toFixed(2)} clinics/km² — roughly ${densityRatio.toFixed(1)}× national average, competitive but workable.`, `comp_density=${clinicsPerKm.toFixed(2)}`);
+    } else {
+        strategicFit = dim('Strategic fit', 'Low', `Catchment density ${clinicsPerKm.toFixed(2)} clinics/km² — ${densityRatio.toFixed(1)}× national average across ${analytics.clinicCount} clinics within the drive-time, heavily saturated.`, `comp_density=${clinicsPerKm.toFixed(2)}`);
+    }
+
+    const dims = [deliverability, assetQuality, platformPotential, strategicFit];
+    const ratings = dims.map(d => d.rating);
+    const highCount = ratings.filter(r => r === 'High').length;
+    const lowCount = ratings.filter(r => r === 'Low').length;
+    const unratedCount = ratings.filter(r => r === 'Unrated').length;
+
+    // A single Unrated dimension is enough to withhold full confidence — never
+    // claim "Attractive platform anchor" (implies every dimension checked out)
+    // when one of the four is genuinely unknown, not just unfavourable.
+    let verdict, verdictDot;
+    if (unratedCount >= 2) {
+        verdict = 'Provisional · enrich to rate'; verdictDot = '#BFBFBF';
+    } else if (lowCount >= 3) {
+        verdict = 'Pass'; verdictDot = '#C00000';
+    } else if (unratedCount === 1) {
+        verdict = 'Opportunistic bolt-on only'; verdictDot = '#E0A800';
+    } else if (highCount === 4) {
+        verdict = 'Attractive platform anchor'; verdictDot = '#6E9277';
+    } else if (deliverability.rating === 'High' && assetQuality.rating === 'High' && (platformPotential.rating === 'Low' || strategicFit.rating === 'Low')) {
+        verdict = 'Opportunistic bolt-on only'; verdictDot = '#E0A800';
+    } else if (highCount >= 2 && lowCount === 0) {
+        verdict = 'Attractive platform anchor'; verdictDot = '#6E9277';
+    } else {
+        verdict = 'Opportunistic bolt-on only'; verdictDot = '#E0A800';
+    }
+    const verdictStyle = {
+        'Attractive platform anchor': { bg: '#E8EFE9', fg: '#2F4636' },
+        'Opportunistic bolt-on only': { bg: '#FFF2CC', fg: '#8A6500' },
+        'Pass': { bg: '#FCE4E4', fg: '#A81111' },
+        'Provisional · enrich to rate': { bg: '#F1F1EE', fg: '#5A5A55' }
+    }[verdict];
+
+    const narrative = [
+        { tone: deliverability.rating === 'Low' ? 'warn' : 'normal', strong: 'Deliverability & scale.', text: `${deliverability.why} ${assetQuality.why}` },
+        { tone: (platformPotential.rating === 'Low' || strategicFit.rating === 'Low') ? 'warn' : 'normal', strong: 'Regional & competitive backdrop.', text: `${platformPotential.why} ${strategicFit.why}` }
+    ];
+    const recText = {
+        'Attractive platform anchor': 'Progress to outreach. This site clears the majority of Foundry’s standing criteria.',
+        'Opportunistic bolt-on only': 'Opportunistic bolt-on. Progress only if priced for the regional/competitive backdrop and paired with a stronger anchor elsewhere.',
+        'Pass': 'Pass. Multiple dimensions are unfavourable with no offsetting asset quality.',
+        'Provisional · enrich to rate': 'Enrich before screening. Missing fields prevent a confident verdict; no recommendation is offered until they’re filled in.'
+    }[verdict];
+    narrative.push({ tone: verdict === 'Attractive platform anchor' ? 'good' : (verdict === 'Provisional · enrich to rate' ? 'normal' : 'warn'), strong: 'Recommendation.', text: recText });
+
+    if (!clinic['Billing Type'] || archetype.billing === 'Unknown') missing.push('billing model');
+    const totalTracked = market === 'gp' ? 5 : 4; // ownership, scale field, density, tier(always known) [+billing for gp]
+    const FIELD_LABELS = { ownership: 'Ownership', gp_count: 'GP headcount', format: 'Format', 'catchment density': 'Catchment density', 'billing model': 'Billing model' };
+    const caveat = missing.length > 0
+        ? `${missing.map(f => FIELD_LABELS[f] || f).join(', ')} unclassified for this site. ${missing.length >= 2 ? 'This read rests substantially on regional and catchment data — treat it as a screen, not an assessment.' : 'Confirm before underwriting.'}`
+        : null;
+    const completeness = `${Math.max(0, totalTracked - missing.length)}/${totalTracked}`;
+
+    const chips = [
+        {
+            label: 'What would make this a platform anchor?',
+            answer: (() => {
+                const tierPart = tierInfo.tier <= 2 ? 'This region already clears the regional bar.' : `A regional composite in Tier 1–2 (this site sits in ${tierInfo.label}) and`;
+                const densityTarget = (nationalAvgDensity * 1.5).toFixed(2);
+                const densityPart = densityRatio != null && densityRatio < 1.5
+                    ? `catchment density is already at or below ~${densityTarget} clinics/km².`
+                    : `catchment density below roughly ${densityTarget} clinics/km² (currently ${clinicsPerKm.toFixed(2)}).`;
+                return `${tierPart} ${densityPart}`;
+            })()
+        },
+        {
+            label: 'How saturated is the competitive landscape here?',
+            answer: sa3Counts
+                ? `Across this SA3, ${sa3Counts.total || 0} tracked clinics split ${sa3Counts.independent || 0} independent / ${sa3Counts.corporate || 0} corporate / ${sa3Counts.publicngo || 0} public-NGO. Within just this clinic's 15-minute drive-time, ${analytics.clinicCount} clinics are present — a tighter, catchment-scoped figure than the SA3 total.`
+                : `${analytics.clinicCount} clinics fall within this clinic's 15-minute catchment. Chain/ownership-level detail beyond that isn't held on this panel — see the SA3 drawer's Archetype mix.`
+        }
+    ];
+
+    return { dims, verdict, verdictBg: verdictStyle.bg, verdictFg: verdictStyle.fg, verdictDot, narrative, caveat, completeness, chips };
+}
+
+// ============================================================
+// Acquisition read — render + interaction (idle/loading/result),
+// scoped to State.acquisitionReads[clinic_id]. Uses direct DOM
+// updates on #acq-read-<id> rather than a full rail re-render.
+// ============================================================
+function buildAcquisitionReadHTML(clinicId) {
+    const st = State.acquisitionReads[clinicId];
+    if (!st || !st.ctx) return '';
+    const idAttr = escJsAttr(clinicId);
+
+    const headActions = (st.phase === 'result')
+        ? `<div class="rd-read-actions">
+             <button class="rd-link-btn muted" onclick="acqReadToggleCollapse('${idAttr}')">${st.collapsed ? 'Expand' : 'Collapse'}</button>
+             <button class="rd-link-btn" onclick="acqReadGenerate('${idAttr}')">Regenerate</button>
+           </div>`
+        : '';
+
+    let body = '';
+    if (!st.phase || st.phase === 'idle') {
+        body = `
+            <div style="font-size:12px;color:var(--muted);line-height:1.45;margin-bottom:12px">Ask whether this clinic fits Foundry's acquisition criteria. Scored against Deliverability, Asset quality, Platform potential and Strategic fit.</div>
+            <button class="rd-generate-btn" onclick="acqReadGenerate('${idAttr}')">Generate read</button>
+        `;
+    } else if (st.phase === 'loading') {
+        body = `
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span class="rd-blink-dot"></span><span style="font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--sage-deep)">Reading clinic data…</span></div>
+            <div class="rd-shim" style="height:22px;width:62%;margin-bottom:12px"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+                <div class="rd-shim" style="height:56px"></div><div class="rd-shim" style="height:56px"></div>
+                <div class="rd-shim" style="height:56px"></div><div class="rd-shim" style="height:56px"></div>
+            </div>
+            <div class="rd-shim" style="height:10px;margin-bottom:6px"></div>
+            <div class="rd-shim" style="height:10px;width:74%"></div>
+        `;
+    } else if (st.phase === 'result' && st.result && st.collapsed) {
+        const read = st.result;
+        body = `
+            <div class="rd-collapsed-row rd-fadein">
+                <span style="width:8px;height:8px;border-radius:50%;background:${read.verdictDot};flex-shrink:0"></span>
+                <span style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase">${read.verdict}</span>
+                <span style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--muted)">${read.dims.map(d => d.rating[0]).join('·')}</span>
+            </div>
+        `;
+    } else if (st.phase === 'result' && st.result) {
+        const read = st.result;
+        body = `
+            <div class="rd-fadein">
+                <div class="rd-verdict-badge" style="background:${read.verdictBg};color:${read.verdictFg}"><span class="rd-verdict-dot" style="background:${read.verdictDot}"></span>${read.verdict}</div>
+                <div class="rd-dims-grid">
+                    ${read.dims.map(d => `
+                        <div class="rd-dim-card">
+                            <div class="rd-dim-card-head">
+                                <span class="rd-dim-name">${d.name}</span>
+                                <span class="rd-dim-rating" style="background:${d.bg};color:${d.fg}">${d.rating}</span>
+                            </div>
+                            <div class="rd-dim-why">${d.why}</div>
+                            <div class="rd-dim-field">${d.field}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="rd-narrative">
+                    ${read.narrative.map(n => `
+                        <div class="rd-narrative-row">
+                            <span class="rd-narrative-dot ${n.tone === 'warn' ? 'warn' : (n.tone === 'good' ? 'good' : '')}"></span>
+                            <div class="rd-narrative-text"><strong>${n.strong}</strong> ${n.text}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                ${read.caveat ? `
+                <div class="caveat" style="margin-bottom:12px">
+                    <svg class="caveat-icon" viewBox="0 0 14 14" fill="none">
+                        <path d="M7 1L13 12H1L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                        <path d="M7 5v3M7 10v0.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                    <div class="caveat-body">${read.caveat} Read generated from ${read.completeness} tracked fields.</div>
+                </div>` : ''}
+                <div class="rd-stamp">
+                    <span>${fmtStamp(st.generatedAt)}</span><span>·</span><span>foundry-read v1</span><span>·</span><span>heuristic, not model-generated</span>
+                </div>
+                <div>
+                    <div class="rd-chips">
+                        ${read.chips.map((c, i) => `<button class="rd-chip" onclick="acqReadAskChip('${idAttr}', ${i})">${c.label}</button>`).join('')}
+                    </div>
+                    ${st.thread.map(t => `
+                        <div class="rd-thread-item rd-fadein">
+                            <div class="rd-thread-q">${t.q}</div>
+                            <div class="rd-thread-a">${t.pending ? '<span class="rd-blink-dot"></span> Thinking…' : t.a}</div>
+                            ${t.live && !t.pending ? '<div class="rd-live-tag">Model-generated — verify independently</div>' : ''}
+                        </div>
+                    `).join('')}
+                    <div class="rd-followup-row">
+                        <input class="rd-followup-input" id="acq-read-draft-${idAttr}" placeholder="Ask a follow-up about this clinic…" onkeydown="if(event.key==='Enter') acqReadAskFreeform('${idAttr}')" />
+                        <button class="rd-followup-send" onclick="acqReadAskFreeform('${idAttr}')">↩</button>
+                    </div>
+                    <div class="rd-followup-note">Scored dimensions above are computed, not model-generated. Suggested questions reuse that computation instantly; free-form questions call a live model scoped to this clinic only, with no memory between clinics.</div>
+                </div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="rd-read-head">
+            <div class="rd-read-head-left">
+                <span class="rd-section-title">Acquisition read</span>
+                <span class="rd-ai-tag">AI</span>
+            </div>
+            ${headActions}
+        </div>
+        ${body}
+    `;
+}
+
+function renderAcqReadSection(clinicId) {
+    const el = document.getElementById('acq-read-' + clinicId);
+    if (el) el.innerHTML = buildAcquisitionReadHTML(clinicId);
+}
+
+function acqReadGenerate(clinicId) {
+    const st = State.acquisitionReads[clinicId];
+    if (!st || !st.ctx) return;
+    clearTimeout(st._timer);
+    st.phase = 'loading';
+    st.collapsed = false;
+    st.thread = [];
+    renderAcqReadSection(clinicId);
+    st._timer = setTimeout(() => {
+        const ctx = st.ctx;
+        st.result = computeAcquisitionRead(ctx.clinic, ctx.archetype, ctx.tierInfo, ctx.analytics, ctx.clinicsPerKm, ctx.nationalAvgDensity, ctx.sa3Counts);
+        st.phase = 'result';
+        st.generatedAt = new Date();
+        renderAcqReadSection(clinicId);
+    }, 1400);
+}
+
+function acqReadToggleCollapse(clinicId) {
+    const st = State.acquisitionReads[clinicId];
+    if (!st) return;
+    st.collapsed = !st.collapsed;
+    renderAcqReadSection(clinicId);
+}
+
+function acqReadAskChip(clinicId, idx) {
+    const st = State.acquisitionReads[clinicId];
+    if (!st || !st.result) return;
+    const c = st.result.chips[idx];
+    if (!c) return;
+    st.thread.push({ q: c.label, a: c.answer });
+    renderAcqReadSection(clinicId);
+}
+
+async function acqReadAskFreeform(clinicId) {
+    const st = State.acquisitionReads[clinicId];
+    if (!st || !st.result) return;
+    const input = document.getElementById('acq-read-draft-' + clinicId);
+    if (!input) return;
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = '';
+    const entry = { q, a: '', live: false, pending: true };
+    st.thread.push(entry);
+    renderAcqReadSection(clinicId);
+    const result = await fetchLiveAnswer('clinic', q, st.result);
+    entry.a = result.text;
+    entry.live = result.ok;
+    entry.pending = false;
+    renderAcqReadSection(clinicId);
+}
+
+// ============================================================
 // Helper: Generate SVG overlap diagram
 // ============================================================
 function generateOverlapDiagram(area1, area2, overlapPct, clinic1Name, clinic2Name) {
@@ -6920,6 +7591,16 @@ function renderSingleClinicRail() {
     const tierDotColor = tierInfo.tier === 3 ? '#E0A800' : (tierInfo.tier <= 2 ? '#6E9277' : '#E0A800');
     const tierPillClass = tierInfo.tier === 3 ? 'amber' : '';
 
+    // Acquisition read — refresh the compute context each render, preserve
+    // phase/collapsed/thread across clinic re-selection (see plan Phase 5).
+    if (!State.acquisitionReads[clinic.clinic_id]) {
+        State.acquisitionReads[clinic.clinic_id] = { phase: 'idle', collapsed: false, thread: [] };
+    }
+    State.acquisitionReads[clinic.clinic_id].ctx = {
+        clinic, archetype, tierInfo, analytics, clinicsPerKm, nationalAvgDensity,
+        sa3Counts: sa3Code ? State.sa3ClinicCounts[sa3Code] : null
+    };
+
     panel.innerHTML = `
         <div class="rd-root">
             <!-- Header -->
@@ -7016,6 +7697,11 @@ function renderSingleClinicRail() {
                         <div class="rd-kpi-value">${formattedResidentsPerClinic}</div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Acquisition Read (AI-flagged heuristic read, see plan Phase 5) -->
+            <div class="rd-section" id="acq-read-${clinic.clinic_id}">
+                ${buildAcquisitionReadHTML(clinic.clinic_id)}
             </div>
 
         </div>

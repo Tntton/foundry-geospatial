@@ -22,6 +22,9 @@ venv/
 .idea/
 *.swp
 
+# Node dependencies (added for api/ask-read.js's Vercel AI Gateway call)
+node_modules/
+
 # Unzipped shapefiles (keep the .zips, ignore extracted folders)
 SA3_2021_AUST_SHP_GDA2020/
 SA2_2021_AUST_SHP_GDA2020/
