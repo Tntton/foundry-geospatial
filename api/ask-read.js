@@ -20,7 +20,7 @@ import { generateText } from 'ai';
 const MODEL = 'anthropic/claude-sonnet-5';
 const MAX_QUESTION_CHARS = 300;
 const MAX_CONTEXT_CHARS = 4000;
-const MAX_OUTPUT_TOKENS = 250;
+const MAX_OUTPUT_TOKENS = 1500; // generous headroom (not unlimited — no auth gate on this endpoint) so answers essentially never get cut mid-sentence
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
 
@@ -41,7 +41,25 @@ function buildInstructions(scope) {
     return `Answer one scoped question about ${subject} for Foundry Health's acquisition screening tool. ` +
         `Use ONLY the JSON fields provided in the user message — never invent figures, ownership relationships, ` +
         `or comparisons to data not given. If the question can't be answered from these fields, say so plainly ` +
-        `instead of guessing. Respond in under ~80 words, plain prose, no markdown, no headings.`;
+        `instead of guessing. Respond with a single short paragraph of plain prose only, 2-3 sentences, under 60 ` +
+        `words total. Do not use ANY markdown syntax — no headings, no "#", no bold/"**", no bullet or numbered ` +
+        `lists. Just plain sentences.`;
+}
+
+// Best-effort cleanup for whatever formatting the model produces despite the
+// instruction above — different models comply with varying reliability, so
+// this is defense-in-depth, not the primary mechanism. Also guards against
+// the model ever echoing HTML-like content into what becomes innerHTML.
+function sanitizeAnswer(text) {
+    let t = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    t = t.replace(/^#{1,6}\s+/gm, '');           // heading markers
+    t = t.replace(/\*\*(.+?)\*\*/g, '$1');       // bold
+    t = t.replace(/^[-*]\s+/gm, '');             // bullet markers
+    t = t.replace(/\n{2,}/g, '\n').trim();
+    return t;
 }
 
 export default async function handler(req, res) {
@@ -99,12 +117,19 @@ export default async function handler(req, res) {
             maxOutputTokens: MAX_OUTPUT_TOKENS
         });
 
-        const answer = (result.text || '').trim();
-        console.log('[ask-read] usage', result.usage);
+        let answer = sanitizeAnswer((result.text || '').trim());
+        console.log('[ask-read] usage', result.usage, 'finishReason', result.finishReason);
 
         if (!answer) {
             res.status(502).json({ error: 'Model returned an empty answer — try rephrasing.' });
             return;
+        }
+
+        // Hit the token cap mid-sentence — trim back to the last complete
+        // sentence rather than showing a dangling half-word.
+        if (result.finishReason === 'length') {
+            const lastEnd = Math.max(answer.lastIndexOf('. '), answer.lastIndexOf('! '), answer.lastIndexOf('? '), answer.lastIndexOf('.\n'));
+            if (lastEnd > 40) answer = answer.slice(0, lastEnd + 1).trim();
         }
 
         res.status(200).json({ answer });

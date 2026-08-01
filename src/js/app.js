@@ -3474,7 +3474,6 @@ function buildRegionReadHTML(sa3Code) {
         <div class="rd-read-head">
             <div class="rd-read-head-left">
                 <span class="drawer-section-title" style="border:none;padding:0;margin:0">Region read</span>
-                <span class="rd-ai-tag">AI</span>
             </div>
             ${headActions}
         </div>
@@ -7294,7 +7293,6 @@ function buildAcquisitionReadHTML(clinicId) {
         <div class="rd-read-head">
             <div class="rd-read-head-left">
                 <span class="rd-section-title">Acquisition read</span>
-                <span class="rd-ai-tag">AI</span>
             </div>
             ${headActions}
         </div>
