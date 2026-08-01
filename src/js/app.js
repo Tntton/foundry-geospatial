@@ -7629,6 +7629,11 @@ function renderSingleClinicRail() {
                 </div>
             </div>
 
+            <!-- Acquisition Read (AI-flagged heuristic read, see plan Phase 5) -->
+            <div class="rd-section" id="acq-read-${clinic.clinic_id}">
+                ${buildAcquisitionReadHTML(clinic.clinic_id)}
+            </div>
+
             <!-- Clinic Archetype -->
             <div class="rd-section">
                 <div class="rd-section-head">
@@ -7695,11 +7700,6 @@ function renderSingleClinicRail() {
                         <div class="rd-kpi-value">${formattedResidentsPerClinic}</div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Acquisition Read (AI-flagged heuristic read, see plan Phase 5) -->
-            <div class="rd-section" id="acq-read-${clinic.clinic_id}">
-                ${buildAcquisitionReadHTML(clinic.clinic_id)}
             </div>
 
         </div>

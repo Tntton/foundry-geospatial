@@ -41,25 +41,45 @@ function buildInstructions(scope) {
     return `Answer one scoped question about ${subject} for Foundry Health's acquisition screening tool. ` +
         `Use ONLY the JSON fields provided in the user message — never invent figures, ownership relationships, ` +
         `or comparisons to data not given. If the question can't be answered from these fields, say so plainly ` +
-        `instead of guessing. Respond with a single short paragraph of plain prose only, 2-3 sentences, under 60 ` +
-        `words total. Do not use ANY markdown syntax — no headings, no "#", no bold/"**", no bullet or numbered ` +
-        `lists. Just plain sentences.`;
+        `instead of guessing. Do not repeat, restate, or title your answer with the question — begin directly with ` +
+        `the analysis. Make it easy to scan: use short paragraphs, "**bold**" for key figures and terms, and ` +
+        `"- " bullet points (one per line) when listing multiple distinct factors. Do not use "#" headings. Keep ` +
+        `the whole answer under ~150 words.`;
 }
 
-// Best-effort cleanup for whatever formatting the model produces despite the
-// instruction above — different models comply with varying reliability, so
-// this is defense-in-depth, not the primary mechanism. Also guards against
-// the model ever echoing HTML-like content into what becomes innerHTML.
-function sanitizeAnswer(text) {
+// Converts the model's constrained markdown (bold via **, bullets via "- "
+// or "1. ", paragraphs separated by line breaks — the only syntax the
+// instructions above ask for) into real HTML, rather than stripping it.
+// Escapes HTML first, so this also guards against the model ever echoing
+// HTML-like content into what becomes innerHTML client-side.
+function formatAnswerHtml(text) {
     let t = String(text)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-    t = t.replace(/^#{1,6}\s+/gm, '');           // heading markers
-    t = t.replace(/\*\*(.+?)\*\*/g, '$1');       // bold
-    t = t.replace(/^[-*]\s+/gm, '');             // bullet markers
-    t = t.replace(/\n{2,}/g, '\n').trim();
-    return t;
+    t = t.replace(/^#{1,6}\s+/gm, '');                          // stray heading markers, just in case
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');      // bold
+    t = t.replace(/\*(.+?)\*/g, '$1');                           // stray single-asterisk emphasis — drop, don't leak literal *word*
+
+    const lines = t.split('\n').map((l) => l.trim());
+    const htmlParts = [];
+    let paragraphBuf = [];
+    let listBuf = [];
+    const flushParagraph = () => {
+        if (paragraphBuf.length) { htmlParts.push(`<p>${paragraphBuf.join(' ')}</p>`); paragraphBuf = []; }
+    };
+    const flushList = () => {
+        if (listBuf.length) { htmlParts.push('<ul>' + listBuf.map((i) => `<li>${i}</li>`).join('') + '</ul>'); listBuf = []; }
+    };
+    for (const line of lines) {
+        if (!line) { flushParagraph(); flushList(); continue; }
+        const listMatch = line.match(/^(?:[-*]|\d+\.)\s+(.*)$/);
+        if (listMatch) { flushParagraph(); listBuf.push(listMatch[1]); }
+        else { flushList(); paragraphBuf.push(line); }
+    }
+    flushParagraph();
+    flushList();
+    return htmlParts.join('') || `<p>${t}</p>`;
 }
 
 export default async function handler(req, res) {
@@ -117,20 +137,23 @@ export default async function handler(req, res) {
             maxOutputTokens: MAX_OUTPUT_TOKENS
         });
 
-        let answer = sanitizeAnswer((result.text || '').trim());
+        let raw = (result.text || '').trim();
         console.log('[ask-read] usage', result.usage, 'finishReason', result.finishReason);
 
-        if (!answer) {
+        if (!raw) {
             res.status(502).json({ error: 'Model returned an empty answer — try rephrasing.' });
             return;
         }
 
         // Hit the token cap mid-sentence — trim back to the last complete
-        // sentence rather than showing a dangling half-word.
+        // sentence rather than showing a dangling half-word. Done on the raw
+        // text, before HTML formatting, so we never cut inside a tag.
         if (result.finishReason === 'length') {
-            const lastEnd = Math.max(answer.lastIndexOf('. '), answer.lastIndexOf('! '), answer.lastIndexOf('? '), answer.lastIndexOf('.\n'));
-            if (lastEnd > 40) answer = answer.slice(0, lastEnd + 1).trim();
+            const lastEnd = Math.max(raw.lastIndexOf('. '), raw.lastIndexOf('! '), raw.lastIndexOf('? '), raw.lastIndexOf('.\n'));
+            if (lastEnd > 40) raw = raw.slice(0, lastEnd + 1).trim();
         }
+
+        const answer = formatAnswerHtml(raw);
 
         res.status(200).json({ answer });
     } catch (err) {
