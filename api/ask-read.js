@@ -17,7 +17,7 @@
 
 import { generateText } from 'ai';
 
-const MODEL = 'anthropic/claude-haiku-4.5';
+const MODEL = 'anthropic/claude-sonnet-5';
 const MAX_QUESTION_CHARS = 300;
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_OUTPUT_TOKENS = 250;
