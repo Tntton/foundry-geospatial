@@ -715,6 +715,72 @@ input, select { font-family: inherit; }
     border-radius: 2px;
 }
 
+/* Running region count (plan Phase F) */
+.funnel-region-count {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+}
+.funnel-count-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--body);
+}
+.funnel-count-row span:last-child {
+    font-family: var(--mono);
+    color: var(--ink);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.funnel-count-row:first-child span:last-child,
+.funnel-count-row:last-child span:last-child {
+    color: var(--muted);
+    font-weight: 400;
+}
+
+/* Model-inputs disclosure (plan Phase F) — placeholder, not a finished design */
+.model-inputs-link {
+    display: block;
+    margin-top: 6px;
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: 10px;
+    color: var(--sage-deep);
+    text-decoration: underline;
+    cursor: pointer;
+}
+.model-inputs-disclosure {
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: var(--sage-wash);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+}
+.model-inputs-disclosure.hidden { display: none; }
+.model-inputs-note {
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--muted);
+}
+
+/* Clinic layer legend swatches (plan Phase F) */
+.clinic-layer-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.clinic-layer-swatch-primary {
+    background: #465E4D;
+}
+.clinic-layer-swatch-secondary {
+    background: rgba(255,255,255,0.6);
+    border: 1.4px solid #6E6E68;
+}
+
 .tier-range {
     font-family: var(--mono);
     font-size: 10px;
@@ -2359,6 +2425,22 @@ input, select { font-family: inherit; }
     margin: 0;
 }
 
+/* Clinic layer toggles (plan Phase E) — labels are full market names, too
+   long for the 4-col nowrap chip grid, so lay out as one column with
+   normal wrapping instead. */
+.clinic-layer-grid {
+    grid-template-columns: 1fr;
+}
+.clinic-layer-grid .mmm-chip-label {
+    white-space: normal;
+    overflow: visible;
+}
+.clinic-layer-grid .mmm-chip-label:has(input:disabled) {
+    cursor: default;
+    color: var(--muted);
+    background: var(--sage-wash);
+}
+
 /* Clinic chains filter grid */
 .clinic-chains-grid {
     display: grid;
@@ -3235,6 +3317,58 @@ input, select { font-family: inherit; }
     color: var(--ink);
     flex: 1;
 }
+
+/* Datasets-as-layers funnel rail (plan Phase C) */
+.funnel-step-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--sage-tint);
+    color: var(--sage-deep);
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.funnel-step-summary {
+    padding: 0 14px 10px 38px;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: -8px;
+    /* shown/hidden in JS (toggleAccordion) based on that step's open state */
+}
+/* Scoring-market dropdown (plan Phase D) — Step 1's single-select switcher,
+   replacing the old index.html round-trip. Same open/close + outside-click
+   convention as .lens-nra-menu. */
+.market-dropdown { position: relative; margin-top: 4px; }
+.market-dropdown-trigger {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; padding: 8px 10px;
+    font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--ink);
+    background: var(--white); border: 1px solid var(--hairline); border-radius: 3px;
+    cursor: pointer; text-align: left;
+}
+.market-dropdown-trigger:hover { border-color: var(--sage); }
+.market-dropdown-caret { font-size: 9px; color: var(--muted); }
+.market-dropdown-menu {
+    display: none;
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: var(--white); border: 1px solid var(--hairline); border-radius: 3px;
+    z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+.market-dropdown-menu.open { display: block; }
+.market-dropdown-item {
+    display: block; width: 100%; padding: 8px 10px;
+    font-family: var(--sans); font-size: 12px; text-align: left;
+    background: none; border: none; border-bottom: 1px solid var(--hairline);
+    cursor: pointer; color: var(--ink);
+}
+.market-dropdown-item:last-child { border-bottom: none; }
+.market-dropdown-item:hover { background: var(--sage-wash); }
+.market-dropdown-item.active { font-weight: 600; color: var(--sage-deep); }
 .thesis-badge {
     font-size: 9px;
     font-weight: 700;

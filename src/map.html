@@ -18,7 +18,7 @@
     <!-- Supabase Auth -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=mob4" />
+    <link rel="stylesheet" href="css/styles.css?v=mob8" />
     <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
     <style>
         /* Hide login buttons */
@@ -111,6 +111,15 @@
             pointer-events: none;
         }
 
+        /* The scoring-market dropdown (plan Phase D) lives inside this same
+           body but must stay usable even when physio greys out the
+           clinic-chain/archetype filters below it — otherwise there'd be no
+           way to switch off physio once selected. */
+        #acc-clinics.physio-disabled .market-dropdown {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
         /* Fix data vintage at bottom of left rail */
         .rail-footer-bar {
             position: sticky;
@@ -145,25 +154,28 @@
          Header
          ============================================================ -->
     <header class="app-header">
-        <!-- Brand (left) -->
-        <a class="brand" href="index.html" style="text-decoration:none;color:inherit;cursor:pointer;flex-shrink:0;">
+        <!-- Brand (left) — the app is now a single persistent shell (plan
+             Phase D), so the logo is a no-op mark, not a link to a retired
+             home page. -->
+        <span class="brand" style="text-decoration:none;color:inherit;flex-shrink:0;">
             <span class="brand-mark">FH</span>
             <span class="brand-divider"></span>
             <span class="brand-wordmark">FOUNDRY HEALTH</span>
-        </a>
+        </span>
 
         <span class="brand-divider" style="margin: 0 20px;"></span>
 
-        <!-- Market display pill — click navigates to index.html to switch market -->
-        <a class="market-switcher-wrapper" id="market-switcher-wrapper" href="index.html" style="flex-shrink:0; text-decoration:none;">
-            <div class="market-switcher-pill" id="market-selector-btn" aria-label="Go to home to switch market">
+        <!-- Market display pill — scoring market now switches in-app via
+             Step 1's dropdown (plan Phase D); this pill just mirrors state. -->
+        <div class="market-switcher-wrapper" id="market-switcher-wrapper" style="flex-shrink:0;">
+            <div class="market-switcher-pill" id="market-selector-btn" aria-label="Current scoring market">
                 <span class="market-switcher-ab" id="market-selector-label">GP</span>
                 <span class="market-switcher-tx">
                     <span class="market-switcher-eyebrow">MARKET</span>
                     <span class="market-switcher-name" id="market-switcher-name">General Practice</span>
                 </span>
             </div>
-        </a>
+        </div>
 
         <!-- Spacer pushes actions to right -->
         <div style="flex:1;"></div>
@@ -179,11 +191,10 @@
          Mobile-only top bar (visible <1024px)
          ============================================================ -->
     <header class="mob-topbar" id="mob-topbar">
-        <a class="mob-brand" id="mob-market-switcher" href="index.html" aria-label="Switch market">
+        <span class="mob-brand" id="mob-market-switcher" aria-label="Current scoring market">
             <span class="brand-mark">FH</span>
             <span class="mob-title" id="mob-market-name">General Practice</span>
-            <span class="mob-market-caret" aria-hidden="true">▾</span>
-        </a>
+        </span>
 
     </header>
 
@@ -499,23 +510,8 @@
 
                 <!-- ── STICKY HEADER ────────────────────────────────── -->
                 <div class="rail-sticky">
-                    <div class="lens-control" id="lens-control">
-                        <button class="lens-seg active" data-lens="composite">Composite</button>
-                        <button class="lens-seg" data-lens="whitespace">Whitespace</button>
-                        <button class="lens-seg" data-lens="seifa">SEIFA</button>
-                        <button class="lens-seg" data-lens="workforce">Workforce</button>
-                        <div class="lens-nra-wrap">
-                            <button class="lens-seg lens-nra-trigger" id="lens-nra-trigger">GP Billings <span class="lens-nra-arrow">▾</span></button>
-                            <div class="lens-nra-menu" id="lens-nra-menu">
-                                <button class="lens-nra-item" data-lens="nra-fees-per-service">Avg fees per service</button>
-                                <button class="lens-nra-item" data-lens="nra-total-fees">Total fees</button>
-                                <button class="lens-nra-item" data-lens="nra-bb">Bulk billing %</button>
-                                <button class="lens-nra-item" data-lens="nra-fee-cagr">3Y fee CAGR</button>
-                                <button class="lens-nra-item" data-lens="nra-bb-cagr">3Y BB% CAGR</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="lens-nra-sublabel" id="lens-nra-sublabel"></div>
+                    <!-- "Colour by" lens chips relocated below the funnel (plan
+                         Phase F) — see the acc-row right before Legend Display. -->
 
                     <div class="global-search-wrap">
                         <div class="global-search">
@@ -546,15 +542,60 @@
                     <button class="filter-chips-clear" id="filter-chips-clear">Clear all</button>
                 </div>
 
-                <!-- ── ACCORDION A: Clinics (Major chains + Archetype) ──────── -->
-                <div class="rail-accordion" id="acc-clinics">
+                <!-- ============================================================
+                     Datasets-as-layers funnel rail (plan Phase C) — 4 steps,
+                     always the same order, one open at a time. Step content
+                     below reuses the exact same input IDs/classes the
+                     pre-funnel accordions used, so every existing JS handler
+                     (applyArchetypeFilter, applySeifaFilter, applyWeights,
+                     etc.) keeps working unchanged.
+                     ============================================================ -->
+
+                <!-- ── STEP 1: What are you buying? ──────── -->
+                <div class="rail-accordion funnel-step" id="acc-clinics">
                     <div class="rail-accordion-hdr" onclick="toggleAccordion('clinics')">
                         <span class="rail-accordion-arrow" id="acc-arrow-clinics">▾</span>
-                        <span class="rail-accordion-title">Clinics</span>
+                        <span class="funnel-step-num">1</span>
+                        <span class="rail-accordion-title">What are you buying?</span>
                     </div>
+                    <div class="funnel-step-summary" id="funnel-summary-clinics"></div>
                     <div class="rail-accordion-body" id="acc-body-clinics">
 
-                        <!-- Major chains section -->
+                        <!-- Scoring market switcher (plan Phase D) — single-select,
+                             drives switchMarket() directly; replaces the old
+                             index.html round-trip. -->
+                        <div class="acc-row">
+                            <div class="rail-eyebrow">Scoring market</div>
+                            <div class="market-dropdown" id="market-dropdown">
+                                <button type="button" class="market-dropdown-trigger" id="market-dropdown-trigger" onclick="event.stopPropagation(); toggleMarketDropdown();" aria-haspopup="listbox" aria-expanded="false">
+                                    <span id="funnel-market-status">General Practice</span>
+                                    <span class="market-dropdown-caret" aria-hidden="true">▾</span>
+                                </button>
+                                <div class="market-dropdown-menu" id="market-dropdown-menu" role="listbox">
+                                    <button type="button" class="market-dropdown-item active" data-market="gp" role="option" onclick="event.stopPropagation(); selectScoringMarket('gp');">General Practice</button>
+                                    <button type="button" class="market-dropdown-item" data-market="physio" role="option" onclick="event.stopPropagation(); selectScoringMarket('physio');">Physiotherapy</button>
+                                    <button type="button" class="market-dropdown-item" data-market="dental" role="option" onclick="event.stopPropagation(); selectScoringMarket('dental');">Dental</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Clinic layers (plan Phase E) — multi-select map overlays,
+                             independent of the single-select scoring market above.
+                             The scoring market's own layer is always on (checked +
+                             disabled here); other layers are additive pin overlays
+                             only — they never affect the choropleth or scoring. -->
+                        <div class="acc-row">
+                            <div class="rail-eyebrow">Clinic layers on map</div>
+                            <div class="mmm-chip-grid clinic-layer-grid" id="clinic-layer-toggles">
+                                <label class="mmm-chip-label"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span>General Practice</span></label>
+                                <label class="mmm-chip-label"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span>Physiotherapy</span></label>
+                                <label class="mmm-chip-label"><input type="checkbox" class="clinic-layer-toggle" data-layer="dental" onchange="toggleClinicLayer('dental', this.checked)"><span>Dental</span></label>
+                            </div>
+                        </div>
+
+                        <!-- Major chains section — scoped to the scoring market only;
+                             secondary clinic layers above don't get chain/archetype
+                             filter panels (deferred, see plan Phase E note). -->
                         <div class="acc-row">
                             <div class="rail-eyebrow">Major chains <button class="acc-reset-link hidden" id="clinic-chains-reset">Reset</button></div>
                             <div class="clinic-chains-grid" id="clinic-chains-grid"></div>
@@ -587,13 +628,15 @@
                     </div>
                 </div>
 
-                <!-- ── ACCORDION B: Geographic Stratification ──────────────── -->
-                <div class="rail-accordion" id="acc-filter">
-                    <div class="rail-accordion-hdr" onclick="toggleAccordion('filter')">
-                        <span class="rail-accordion-arrow" id="acc-arrow-filter">▸</span>
-                        <span class="rail-accordion-title">Geographic stratification</span>
+                <!-- ── STEP 2: Where are you looking? ──────── -->
+                <div class="rail-accordion funnel-step" id="acc-geo">
+                    <div class="rail-accordion-hdr" onclick="toggleAccordion('geo')">
+                        <span class="rail-accordion-arrow" id="acc-arrow-geo">▸</span>
+                        <span class="funnel-step-num">2</span>
+                        <span class="rail-accordion-title">Where are you looking?</span>
                     </div>
-                    <div class="rail-accordion-body collapsed" id="acc-body-filter">
+                    <div class="funnel-step-summary" id="funnel-summary-geo"></div>
+                    <div class="rail-accordion-body collapsed" id="acc-body-geo">
 
                         <div class="acc-row">
                             <div class="rail-eyebrow">State / Territory</div>
@@ -610,9 +653,35 @@
                             </select>
                         </div>
 
+                        <div class="acc-row">
+                            <div class="rail-eyebrow" title="MMM remoteness class 1 (major cities) to 7 (very remote). AND logic with SEIFA in the next step — none selected = all shown.">Remoteness</div>
+                            <div class="acc-sublabel">MMM class</div>
+                            <div class="mmm-chip-grid">
+                                <label class="mmm-chip-label" title="MM1 · Major cities"><input type="checkbox" class="mmm-chip" value="1"><span>1</span></label>
+                                <label class="mmm-chip-label" title="MM2 · Inner regional"><input type="checkbox" class="mmm-chip" value="2"><span>2</span></label>
+                                <label class="mmm-chip-label" title="MM3 · Large rural"><input type="checkbox" class="mmm-chip" value="3"><span>3</span></label>
+                                <label class="mmm-chip-label" title="MM4 · Medium rural"><input type="checkbox" class="mmm-chip" value="4"><span>4</span></label>
+                                <label class="mmm-chip-label" title="MM5 · Small rural"><input type="checkbox" class="mmm-chip" value="5"><span>5</span></label>
+                                <label class="mmm-chip-label" title="MM6 · Remote"><input type="checkbox" class="mmm-chip" value="6"><span>6</span></label>
+                                <label class="mmm-chip-label" title="MM7 · Very remote"><input type="checkbox" class="mmm-chip" value="7"><span>7</span></label>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- ── STEP 3: What kind of ground? ──────── -->
+                <div class="rail-accordion funnel-step" id="acc-ground">
+                    <div class="rail-accordion-hdr" onclick="toggleAccordion('ground')">
+                        <span class="rail-accordion-arrow" id="acc-arrow-ground">▸</span>
+                        <span class="funnel-step-num">3</span>
+                        <span class="rail-accordion-title">What kind of ground?</span>
+                    </div>
+                    <div class="funnel-step-summary" id="funnel-summary-ground"></div>
+                    <div class="rail-accordion-body collapsed" id="acc-body-ground">
+
                         <div class="acc-row" id="ses-remoteness-section">
-                            <div class="rail-eyebrow" title="SEIFA IRSAD socioeconomic index (1–10) combined with MMM remoteness class (1–7). AND logic — none selected = all shown.">Remoteness</div>
-                            <div class="acc-sublabel">SEIFA IRSAD decile</div>
+                            <div class="rail-eyebrow" title="SEIFA IRSAD socioeconomic index, 1 (most disadvantaged) to 10 (most advantaged). AND logic with MMM in the previous step — none selected = all shown.">SEIFA IRSAD decile</div>
                             <div class="seifa-chip-grid" id="seifa-chip-grid">
                                 <label class="seifa-chip-label" title="Decile 1 — most disadvantaged"><input type="checkbox" class="seifa-chip" value="1"><span>1</span></label>
                                 <label class="seifa-chip-label" title="Decile 2"><input type="checkbox" class="seifa-chip" value="2"><span>2</span></label>
@@ -624,16 +693,6 @@
                                 <label class="seifa-chip-label" title="Decile 8"><input type="checkbox" class="seifa-chip" value="8"><span>8</span></label>
                                 <label class="seifa-chip-label" title="Decile 9"><input type="checkbox" class="seifa-chip" value="9"><span>9</span></label>
                                 <label class="seifa-chip-label" title="Decile 10 — most advantaged"><input type="checkbox" class="seifa-chip" value="10"><span>10</span></label>
-                            </div>
-                            <div class="acc-sublabel" style="margin-top:8px">MMM class</div>
-                            <div class="mmm-chip-grid">
-                                <label class="mmm-chip-label" title="MM1 · Major cities"><input type="checkbox" class="mmm-chip" value="1"><span>1</span></label>
-                                <label class="mmm-chip-label" title="MM2 · Inner regional"><input type="checkbox" class="mmm-chip" value="2"><span>2</span></label>
-                                <label class="mmm-chip-label" title="MM3 · Large rural"><input type="checkbox" class="mmm-chip" value="3"><span>3</span></label>
-                                <label class="mmm-chip-label" title="MM4 · Medium rural"><input type="checkbox" class="mmm-chip" value="4"><span>4</span></label>
-                                <label class="mmm-chip-label" title="MM5 · Small rural"><input type="checkbox" class="mmm-chip" value="5"><span>5</span></label>
-                                <label class="mmm-chip-label" title="MM6 · Remote"><input type="checkbox" class="mmm-chip" value="6"><span>6</span></label>
-                                <label class="mmm-chip-label" title="MM7 · Very remote"><input type="checkbox" class="mmm-chip" value="7"><span>7</span></label>
                             </div>
                             <div class="acc-hint">SEIFA: 1=disadvantaged, 10=advantaged · selecting any decile auto-switches lens to SEIFA</div>
                         </div>
@@ -667,13 +726,15 @@
                     </div>
                 </div>
 
-                <!-- ── ACCORDION C: Adjust thesis ────────────────────── -->
-                <div class="rail-accordion" id="acc-thesis">
+                <!-- ── STEP 4: What matters most? ──────── -->
+                <div class="rail-accordion funnel-step" id="acc-thesis">
                     <div class="rail-accordion-hdr" onclick="toggleAccordion('thesis')">
                         <span class="rail-accordion-arrow" id="acc-arrow-thesis">▸</span>
-                        <span class="rail-accordion-title">Adjust thesis</span>
+                        <span class="funnel-step-num">4</span>
+                        <span class="rail-accordion-title">What matters most?</span>
                         <span class="thesis-badge" id="thesis-badge" style="display:none">custom</span>
                     </div>
+                    <div class="funnel-step-summary" id="funnel-summary-thesis"></div>
                     <div class="rail-accordion-body collapsed" id="acc-body-thesis">
                         <div class="thesis-banner">
                             Composite weights — base case shown muted; drag to stress-test alternates.
@@ -741,12 +802,55 @@
                     </div>
                 </div>
 
+                <!-- ── Running region count (plan Phase F) ──────────────── -->
+                <div class="acc-row">
+                    <div class="rail-eyebrow">Regions</div>
+                    <div class="funnel-region-count" id="funnel-region-count"></div>
+                </div>
+
+                <!-- ── Colour by (relocated from the sticky header, plan Phase F)
+                     — same #lens-control/#lens-nra-* ids, same JS wiring,
+                     just moved below the funnel per the resolved design. -->
+                <div class="acc-row">
+                    <div class="rail-eyebrow">Colour by</div>
+                    <div class="lens-control" id="lens-control">
+                        <button class="lens-seg active" data-lens="composite">Composite</button>
+                        <button class="lens-seg" data-lens="whitespace">Whitespace</button>
+                        <button class="lens-seg" data-lens="seifa">SEIFA</button>
+                        <button class="lens-seg" data-lens="workforce">Workforce</button>
+                        <div class="lens-nra-wrap">
+                            <button class="lens-seg lens-nra-trigger" id="lens-nra-trigger">GP Billings <span class="lens-nra-arrow">▾</span></button>
+                            <div class="lens-nra-menu" id="lens-nra-menu">
+                                <button class="lens-nra-item" data-lens="nra-fees-per-service">Avg fees per service</button>
+                                <button class="lens-nra-item" data-lens="nra-total-fees">Total fees</button>
+                                <button class="lens-nra-item" data-lens="nra-bb">Bulk billing %</button>
+                                <button class="lens-nra-item" data-lens="nra-fee-cagr">3Y fee CAGR</button>
+                                <button class="lens-nra-item" data-lens="nra-bb-cagr">3Y BB% CAGR</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="lens-nra-sublabel" id="lens-nra-sublabel"></div>
+                    <!-- Deferred "Model inputs"/coverage-strip disclosure (plan Phase F)
+                         — explicitly a placeholder, not a finished design; the canvas
+                         never resolved where this content lives. Surfaced as a
+                         disclosure behind the Composite chip, one of the canvas's own
+                         two candidate answers. Only shown while viewing Composite. -->
+                    <button class="model-inputs-link" id="model-inputs-link" onclick="toggleModelInputsDisclosure()">Model inputs</button>
+                    <div class="model-inputs-disclosure hidden" id="model-inputs-disclosure"></div>
+                </div>
+
                 <!-- ── Legend Display ──────────────────────────── -->
                 <div id="acc-display" class="legend-display">
                     <div id="acc-body-display" class="legend-display-body">
                         <div class="acc-row">
                             <div class="rail-eyebrow" id="legend-title">Composite tier ramp</div>
                             <div class="tier-legend" id="legend-content"></div>
+                        </div>
+                        <!-- Clinic layer legend (plan Phase F) — one swatch per active
+                             clinic layer, primary (scoring market) vs secondary. -->
+                        <div class="acc-row" id="clinic-layer-legend-row" style="display:none">
+                            <div class="rail-eyebrow">Clinic layers</div>
+                            <div id="clinic-layer-legend"></div>
                         </div>
                     </div>
                 </div>
@@ -1845,7 +1949,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
 <div id="toast" class="toast hidden"></div>
-<script src="js/app.js?v=rr15"></script>
+<script src="js/app.js?v=rr23"></script>
 <script src="js/components/targets-tab.js?v=rr3"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 
@@ -1860,17 +1964,11 @@ function initializeLeftRailUI() {
     if (loginBtn) loginBtn.style.display = 'none';
     if (logoutBtn) logoutBtn.style.display = 'none';
 
-    // Clinics section: collapse it by default, and grey out for physio
-    const accBodyClinics = document.getElementById('acc-body-clinics');
-    const clinicsArrow = document.getElementById('acc-arrow-clinics');
+    // Step 1 (funnel rail, plan Phase C) stays open by default — "always
+    // the same order," the funnel starts at step 1, unlike the old
+    // independent-accordions model this replaced. Only grey it out for physio.
     const accClinics = document.getElementById('acc-clinics');
     const clinicsHdr = accClinics?.querySelector('.rail-accordion-hdr');
-
-    // Collapse clinics section by default
-    if (accBodyClinics && !accBodyClinics.classList.contains('collapsed')) {
-        accBodyClinics.classList.add('collapsed');
-        if (clinicsArrow) clinicsArrow.textContent = '▸';
-    }
 
     // For physio: grey out clinics (no chains/archetypes classified) and make non-clickable
     if (market === 'physio' && accClinics) {

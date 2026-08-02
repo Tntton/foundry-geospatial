@@ -60,7 +60,9 @@ const State = {
     },
     sa3Data: null,
     sa2Data: null,                  // SEIFA SA2 polygons (F-06)
-    clinicsData: [],
+    clinicsData: [],                // flat, assembled view — see rebuildActiveClinicsData()
+    clinicsByVertical: { gp: [], physio: [], dental: [] },  // per-vertical cache, Datasets-as-layers (plan Phase A)
+    activeClinicLayers: ['gp'],     // which verticals' clinic pins are currently shown; scoring market's own layer is always included
     sa3RawLookup: {},
     sa3ClinicCounts: {},
     currentState: '',
@@ -104,8 +106,8 @@ const State = {
 // ============================================================
 // Supabase Authentication (initialized in HTML inline script)
 // ============================================================
-// Supabase client is created in index.html and available as window.supabase_client
-// Auth functions are defined in index.html inline script
+// Supabase client is created in map.html and available as window.supabase_client
+// Auth functions are defined in map.html's inline script
 
 // Extend State with auth properties
 State.user = null;
@@ -858,6 +860,66 @@ async function loadMarketData(marketId, progressCb) {
     return { clinicsData, config };
 }
 
+// ============================================================
+// Datasets-as-layers (plan Phase A) — assembles the flat State.clinicsData
+// view every existing call site reads from State.clinicsByVertical +
+// State.activeClinicLayers. Call after either changes.
+// ============================================================
+function rebuildActiveClinicsData() {
+    State.clinicsData = State.activeClinicLayers.flatMap((layer) => State.clinicsByVertical[layer] || []);
+}
+
+// ============================================================
+// Datasets-as-layers (plan Phase E) — clinic layers are multi-select map
+// overlays, independent of the single-select scoring market. Toggling a
+// secondary layer on/off never touches State.sa3Data, scores, or filters —
+// those stay scoped to State.markets.current. Per-layer filter sub-panels
+// (segments/ndis/telehealth for physio; ownership/chain for dental) are an
+// explicitly deferred follow-up, same spirit as the region/chain dossier —
+// this phase proves out the layering mechanic itself.
+// ============================================================
+function renderClinicLayerCheckboxes() {
+    document.querySelectorAll('.clinic-layer-toggle').forEach((el) => {
+        const layer = el.dataset.layer;
+        const isPrimary = layer === State.markets.current;
+        el.checked = isPrimary || State.activeClinicLayers.includes(layer);
+        el.disabled = isPrimary;
+    });
+}
+
+async function toggleClinicLayer(layer, checked) {
+    if (layer === State.markets.current) return; // scoring market's own layer can't be toggled off from here
+
+    if (checked) {
+        if (!State.activeClinicLayers.includes(layer)) State.activeClinicLayers.push(layer);
+        if (!State.clinicsByVertical[layer] || !State.clinicsByVertical[layer].length) {
+            // loadMarketData() is reused for its fetch+normalize+SA3-match
+            // pipeline, but it also side-effects state meant for the
+            // *scoring* market (State.markets.config, State.uniqueClinicChains)
+            // — save/restore those so loading a secondary layer can't
+            // clobber the scoring market's own display state.
+            const savedConfig = State.markets.config;
+            const savedChains = State.uniqueClinicChains;
+            try {
+                const { clinicsData } = await loadMarketData(layer, () => {});
+                clinicsData.forEach((c) => { c._layer = layer; });
+                State.clinicsByVertical[layer] = clinicsData;
+            } finally {
+                State.markets.config = savedConfig;
+                State.uniqueClinicChains = savedChains;
+            }
+        }
+        rebuildActiveClinicsData();
+        addSecondaryClinicLayer(layer);
+    } else {
+        State.activeClinicLayers = State.activeClinicLayers.filter((l) => l !== layer);
+        rebuildActiveClinicsData();
+        removeClinicLayer(layer);
+    }
+    renderFunnelSummaries();
+    renderClinicLayerLegend(); // plan Phase F
+}
+
 async function switchMarket(marketId) {
     /**
      * Switch to a different market
@@ -883,7 +945,15 @@ async function switchMarket(marketId) {
         // Update state
         State.markets.current = marketId;
         State.markets.config = config;
-        State.clinicsData = clinicsData;
+        // Datasets-as-layers (plan Phase A): store per-vertical, then assemble
+        // the flat State.clinicsData view every existing call site still reads
+        // unchanged. Phase A keeps this single-layer (multi-select lands in
+        // Phase E) — switching the scoring market resets the active layer set
+        // to just that vertical.
+        clinicsData.forEach(c => { c._layer = marketId; });
+        State.clinicsByVertical[marketId] = clinicsData;
+        State.activeClinicLayers = [marketId];
+        rebuildActiveClinicsData();
         State.sa3ClinicCounts = {};
 
         // Recompute clinic metrics
@@ -911,9 +981,13 @@ async function switchMarket(marketId) {
         // Mirror the market name into the mobile top-bar switcher
         const mobName = document.getElementById('mob-market-name');
         if (mobName) mobName.textContent = config.market_name || 'Market';
+        // Mirror into Step 1's scoring-market dropdown trigger (plan Phase D)
+        const funnelMarketStatus = document.getElementById('funnel-market-status');
+        if (funnelMarketStatus) funnelMarketStatus.textContent = config.market_name || 'Market';
 
-        // Update active market button
-        document.querySelectorAll('.market-selector-item').forEach(btn => {
+        // Update active market button (legacy hook, kept if ever reintroduced)
+        // and the Step 1 scoring-market dropdown (plan Phase D).
+        document.querySelectorAll('.market-selector-item, .market-dropdown-item').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.market === marketId);
         });
 
@@ -945,6 +1019,16 @@ async function switchMarket(marketId) {
         renderRankings();
         populateClinicChainsFilter();
         updateGPSpecificFilters();
+        renderFunnelSummaries();  // plan Phase C
+        renderClinicLayerCheckboxes();  // plan Phase E
+        renderClinicLayerLegend();  // plan Phase F
+
+        // Re-run the physio-disabled greying logic (defined inline in
+        // map.html, reads market from the URL param setQueryParam() above
+        // just updated) — plan Phase C flagged this as going stale once
+        // switchMarket() became reachable from a live in-app control
+        // instead of only the old index.html round-trip.
+        if (typeof initializeLeftRailUI === 'function') initializeLeftRailUI();
 
         loaderEl.classList.add('hide');
         console.log(`[market] Switched to ${marketId} successfully`);
@@ -980,13 +1064,19 @@ function updateGPSpecificFilters() {
         setMapView('composite');
     }
 
-    // Geographic Stratification: always visible, but keep collapsed for non-GP markets
-    const geoBody = document.getElementById('acc-body-filter');
-    if (geoBody) {
-        if (!isGP && !geoBody.classList.contains('collapsed')) {
-            geoBody.classList.add('collapsed');
+    // Funnel steps 2/3 (Geographic stratification's old home, plan Phase C
+    // split it into "Where are you looking?"/"What kind of ground?"):
+    // always visible, but keep collapsed for non-GP markets.
+    ['geo', 'ground'].forEach((stepId) => {
+        const stepBody = document.getElementById('acc-body-' + stepId);
+        if (stepBody && !isGP && !stepBody.classList.contains('collapsed')) {
+            stepBody.classList.add('collapsed');
+            const stepArrow = document.getElementById('acc-arrow-' + stepId);
+            if (stepArrow) stepArrow.textContent = '▸';
+            const stepSummary = document.getElementById('funnel-summary-' + stepId);
+            if (stepSummary) stepSummary.style.display = '';
         }
-    }
+    });
 
     // Hide Archetype content for non-GP markets (header still visible, content hidden)
     const archetypeContent = document.getElementById('archetype-content');
@@ -1615,6 +1705,199 @@ function initMap() {
     });
 }
 
+// ============================================================
+// Datasets-as-layers (plan Phase E) — per-clinic-layer map source/layer
+// helpers. Shared by attachMapLayers() (initial build, primary layer only
+// today since switchMarket() always resets activeClinicLayers to just the
+// new scoring market) and toggleClinicLayer() (adding/removing a secondary
+// layer live, without a full attachMapLayers() rebuild).
+// ============================================================
+// Guards against "Layer already exists" — seen in testing when a checkbox's
+// change event fires more than once for a single toggle (this environment's
+// click handling can double-fire). Idempotent add is cheap insurance.
+function addLayerSafe(config) {
+    if (!map.getLayer(config.id)) map.addLayer(config);
+}
+
+function buildClinicLayerSource(layer) {
+    const clinics = State.clinicsByVertical[layer] || [];
+    const geojson = {
+        type: 'FeatureCollection',
+        features: clinics.map((c, idx) => ({
+            type: 'Feature',
+            id: idx,
+            geometry: { type: 'Point', coordinates: [parseFloat(c.longitude), parseFloat(c.latitude)] },
+            properties: c
+        }))
+    };
+    const sourceId = `clinics-${layer}`;
+    if (map.getSource(sourceId)) {
+        map.getSource(sourceId).setData(geojson);
+    } else {
+        map.addSource(sourceId, { type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50 });
+    }
+    return sourceId;
+}
+
+function addPrimaryClinicLayers(layer) {
+    const sourceId = buildClinicLayerSource(layer);
+
+    addLayerSafe({
+        id: 'clinics-clusters',
+        type: 'circle',
+        source: sourceId,
+        filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': '#465E4D',
+            'circle-opacity': 0.85,
+            'circle-stroke-color': '#FFFFFF',
+            'circle-stroke-width': 1.5,
+            'circle-radius': [
+                'step', ['get', 'point_count'],
+                12, 25, 16, 100, 20, 500, 26
+            ]
+        }
+    });
+    addLayerSafe({
+        id: 'clinics-cluster-count',
+        type: 'symbol',
+        source: sourceId,
+        filter: ['has', 'point_count'],
+        layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 11,
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
+        },
+        paint: { 'text-color': '#FFFFFF' }
+    });
+
+    const clinicLayerStyle = (color) => ({
+        'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            6,  ['match', ['get', 'clinic_format'], 'Big-box', 4.5, 'Mid-format', 3.5, 'Small', 2.5, 3],
+            12, ['match', ['get', 'clinic_format'], 'Big-box', 10,  'Mid-format', 8,   'Small', 6,   7]
+        ],
+        'circle-color': color,
+        'circle-opacity': 0.9,
+        'circle-stroke-color': '#FFFFFF',
+        'circle-stroke-width': 1.2
+    });
+
+    addLayerSafe({
+        id: 'clinics-corporate',
+        type: 'circle',
+        source: sourceId,
+        filter: ['==', ['get', 'ownership'], 'Corporate'],
+        paint: clinicLayerStyle(OWNERSHIP_COLORS.Corporate),
+        minzoom: 6
+    });
+    addLayerSafe({
+        id: 'clinics-independent',
+        type: 'circle',
+        source: sourceId,
+        filter: ['==', ['get', 'ownership'], 'Independent'],
+        paint: clinicLayerStyle(OWNERSHIP_COLORS.Independent),
+        minzoom: 6
+    });
+    addLayerSafe({
+        id: 'clinics-public',
+        type: 'circle',
+        source: sourceId,
+        filter: ['==', ['get', 'ownership'], 'NGO'],
+        paint: clinicLayerStyle(OWNERSHIP_COLORS['NGO']),
+        minzoom: 6
+    });
+    addLayerSafe({
+        id: 'clinics-unknown',
+        type: 'circle',
+        source: sourceId,
+        filter: ['==', ['get', 'ownership'], 'Unknown'],
+        paint: clinicLayerStyle('#9A9A9A'), // neutral grey for unknown ownership
+        minzoom: 6
+    });
+
+    addLayerSafe({
+        id: 'clinics-labels',
+        type: 'symbol',
+        source: sourceId,
+        minzoom: 10,
+        layout: {
+            'text-field': ['get', 'clinic_name'],
+            'text-size': 10,
+            'text-offset': [0, 1.2],
+            'text-anchor': 'top',
+            'text-allow-overlap': false,
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
+        },
+        paint: {
+            'text-color': '#000000',
+            'text-halo-color': '#FFFFFF',
+            'text-halo-width': 1.5,
+            'text-halo-blur': 0.5
+        }
+    });
+}
+
+// Secondary (non-scoring) clinic layer — a single outlined/hollow circle
+// style, no ownership split, no labels. Visually reads as "overlay, not
+// the scored dataset" per the plan's primary-vs-secondary distinction.
+function addSecondaryClinicLayer(layer) {
+    const sourceId = buildClinicLayerSource(layer);
+
+    addLayerSafe({
+        id: `clinics-${layer}-clusters`,
+        type: 'circle',
+        source: sourceId,
+        filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': 'rgba(255,255,255,0.5)',
+            'circle-stroke-color': '#6E6E68',
+            'circle-stroke-width': 1.5,
+            'circle-radius': [
+                'step', ['get', 'point_count'],
+                10, 25, 14, 100, 18, 500, 24
+            ]
+        }
+    });
+    addLayerSafe({
+        id: `clinics-${layer}-cluster-count`,
+        type: 'symbol',
+        source: sourceId,
+        filter: ['has', 'point_count'],
+        layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 10,
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
+        },
+        paint: { 'text-color': '#3a3a37' }
+    });
+    addLayerSafe({
+        id: `clinics-${layer}-pins`,
+        type: 'circle',
+        source: sourceId,
+        filter: ['!', ['has', 'point_count']],
+        minzoom: 6,
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 3, 12, 6.5],
+            'circle-color': 'rgba(255,255,255,0.6)',
+            'circle-stroke-color': '#6E6E68',
+            'circle-stroke-width': 1.4
+        }
+    });
+
+    wireSecondaryClinicLayerEvents(layer);
+}
+
+function removeClinicLayer(layer) {
+    const isPrimary = layer === State.markets.current;
+    const ids = isPrimary
+        ? ['clinics-labels', 'clinics-unknown', 'clinics-public', 'clinics-independent', 'clinics-corporate', 'clinics-cluster-count', 'clinics-clusters']
+        : [`clinics-${layer}-pins`, `clinics-${layer}-cluster-count`, `clinics-${layer}-clusters`];
+    ids.forEach((id) => { if (map.getLayer(id)) map.removeLayer(id); });
+    const sourceId = `clinics-${layer}`;
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+}
+
 async function attachMapLayers() {
     await mapReady;
 
@@ -1681,80 +1964,18 @@ async function attachMapLayers() {
         }
     });
 
-    const clinicsGeoJson = {
-        type: 'FeatureCollection',
-        features: State.clinicsData.map((c, idx) => ({
-            type: 'Feature',
-            id: idx,
-            geometry: { type: 'Point', coordinates: [parseFloat(c.longitude), parseFloat(c.latitude)] },
-            properties: c
-        }))
-    };
-    map.addSource('clinics', { type: 'geojson', data: clinicsGeoJson });
-
-    const clinicLayerStyle = (color) => ({
-        'circle-radius': [
-            'interpolate', ['linear'], ['zoom'],
-            6,  ['match', ['get', 'clinic_format'], 'Big-box', 4.5, 'Mid-format', 3.5, 'Small', 2.5, 3],
-            12, ['match', ['get', 'clinic_format'], 'Big-box', 10,  'Mid-format', 8,   'Small', 6,   7]
-        ],
-        'circle-color': color,
-        'circle-opacity': 0.9,
-        'circle-stroke-color': '#FFFFFF',
-        'circle-stroke-width': 1.2
-    });
-
-    map.addLayer({
-        id: 'clinics-corporate',
-        type: 'circle',
-        source: 'clinics',
-        filter: ['==', ['get', 'ownership'], 'Corporate'],
-        paint: clinicLayerStyle(OWNERSHIP_COLORS.Corporate),
-        minzoom: 6
-    });
-    map.addLayer({
-        id: 'clinics-independent',
-        type: 'circle',
-        source: 'clinics',
-        filter: ['==', ['get', 'ownership'], 'Independent'],
-        paint: clinicLayerStyle(OWNERSHIP_COLORS.Independent),
-        minzoom: 6
-    });
-    map.addLayer({
-        id: 'clinics-public',
-        type: 'circle',
-        source: 'clinics',
-        filter: ['==', ['get', 'ownership'], 'NGO'],
-        paint: clinicLayerStyle(OWNERSHIP_COLORS['NGO']),
-        minzoom: 6
-    });
-    map.addLayer({
-        id: 'clinics-unknown',
-        type: 'circle',
-        source: 'clinics',
-        filter: ['==', ['get', 'ownership'], 'Unknown'],
-        paint: clinicLayerStyle('#9A9A9A'), // neutral grey for unknown ownership
-        minzoom: 6
-    });
-
-    map.addLayer({
-        id: 'clinics-labels',
-        type: 'symbol',
-        source: 'clinics',
-        minzoom: 10,
-        layout: {
-            'text-field': ['get', 'clinic_name'],
-            'text-size': 10,
-            'text-offset': [0, 1.2],
-            'text-anchor': 'top',
-            'text-allow-overlap': false,
-            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
-        },
-        paint: {
-            'text-color': '#000000',
-            'text-halo-color': '#FFFFFF',
-            'text-halo-width': 1.5,
-            'text-halo-blur': 0.5
+    // Datasets-as-layers (plan Phase E): one source+layer-set per active
+    // clinic layer, not one shared 'clinics' source. The scoring market's
+    // own layer (primary) keeps its original ids/ownership-split styling
+    // (clinics-corporate etc.) unchanged — every existing filter/click
+    // handler that references those ids keeps working untouched. Other
+    // active layers (secondary — additive overlays, don't drive scoring)
+    // get their own muted/outlined `clinics-{layer}-*` ids.
+    State.activeClinicLayers.forEach((layer) => {
+        if (layer === State.markets.current) {
+            addPrimaryClinicLayers(layer);
+        } else {
+            addSecondaryClinicLayer(layer);
         }
     });
 
@@ -1850,6 +2071,15 @@ async function ensureSEIFALayer() {
 // ============================================================
 function setMapView(view) {
     State.currentMapView = view;
+
+    // Model-inputs disclosure (plan Phase F) only makes sense for Composite
+    const modelInputsLink = document.getElementById('model-inputs-link');
+    if (modelInputsLink) modelInputsLink.style.display = view === 'composite' ? '' : 'none';
+    if (view !== 'composite') {
+        const disclosure = document.getElementById('model-inputs-disclosure');
+        if (disclosure) disclosure.classList.add('hidden');
+    }
+
     const sa3Vis = (view === 'seifa') ? 'none' : 'visible';
 
     ['sa3-fill', 'sa3-outline', 'sa3-outline-sel'].forEach(id => {
@@ -2166,6 +2396,69 @@ function renderLegend(view) {
             </div>`;
         return;
     }
+}
+
+// ============================================================
+// Datasets-as-layers (plan Phase F) — live running SA3 count below the
+// funnel. Reuses updateRailStats()'s own filter chain (state/MMM for
+// geography, +DPA/workforce for "after filters") — no new data or
+// filtering logic, per the plan's own "no new data needed" constraint.
+// ============================================================
+function renderFunnelRegionCount(allCount, afterGeoCount, afterFiltersCount, scoredCount) {
+    const el = document.getElementById('funnel-region-count');
+    if (!el) return;
+    const row = (label, val) => `<div class="funnel-count-row"><span>${label}</span><span>${val.toLocaleString('en-AU')}</span></div>`;
+    el.innerHTML =
+        row('All SA3', allCount) +
+        row('After geography', afterGeoCount) +
+        row('After filters', afterFiltersCount) +
+        row('Scored &amp; rankable', scoredCount);
+}
+
+// Deferred "Model inputs"/coverage-strip disclosure (plan Phase F) — an
+// explicit placeholder (the canvas asked for this twice and never resolved
+// a layout), surfaced behind the Composite chip per one of the canvas's own
+// two candidate answers. Reuses the same scored/total counts as the
+// running count above — no new computation invented.
+function toggleModelInputsDisclosure() {
+    const el = document.getElementById('model-inputs-disclosure');
+    if (!el) return;
+    const opening = el.classList.contains('hidden');
+    el.classList.toggle('hidden', !opening);
+    if (opening) renderModelInputsDisclosure();
+}
+
+function renderModelInputsDisclosure() {
+    const el = document.getElementById('model-inputs-disclosure');
+    if (!el || !State.sa3Data) return;
+    const all = State.sa3Data.features.length;
+    const scored = State.sa3Data.features.filter(f => Number.isFinite(parseFloat(f.properties.Composite_Score))).length;
+    el.innerHTML = `
+        <div class="model-inputs-note">
+            <strong>Model inputs</strong> — placeholder, not a finished design.
+            ${scored.toLocaleString('en-AU')} of ${all.toLocaleString('en-AU')} SA3 scored
+            (Demand · Supply · Competition · Economics).
+        </div>
+    `;
+}
+
+// One legend swatch per active clinic layer — primary (scoring market,
+// filled dot, matches attachMapLayers()'s ownership-colored styling) vs
+// secondary (hollow/outlined dot, matches addSecondaryClinicLayer()'s
+// muted style). Call after anything that changes State.activeClinicLayers.
+function renderClinicLayerLegend() {
+    const row = document.getElementById('clinic-layer-legend-row');
+    const el = document.getElementById('clinic-layer-legend');
+    if (!row || !el) return;
+    const labels = { gp: 'General Practice', physio: 'Physiotherapy', dental: 'Dental' };
+    row.style.display = State.activeClinicLayers.length ? '' : 'none';
+    el.innerHTML = State.activeClinicLayers.map((layer) => {
+        const isPrimary = layer === State.markets.current;
+        const swatch = isPrimary
+            ? '<span class="clinic-layer-swatch clinic-layer-swatch-primary"></span>'
+            : '<span class="clinic-layer-swatch clinic-layer-swatch-secondary"></span>';
+        return `<div class="tier-row">${swatch}<span>${labels[layer] || layer}${isPrimary ? ' · scoring' : ''}</span></div>`;
+    }).join('');
 }
 
 function applySeifaFilter() {
@@ -2500,12 +2793,28 @@ function wireMapInteractions() {
 
     map.on('click', 'sa3-fill', (e) => {
         if (!e.features.length) return;
-        // Don't fire SA3 click when the user clicked a clinic marker on top
+        // Don't fire SA3 click when the user clicked a clinic marker (or
+        // cluster) on top — includes any secondary layers currently active
+        // (plan Phase E), not just the scoring market's own layer.
         const clinicHit = map.queryRenderedFeatures(e.point, {
-            layers: ['clinics-corporate', 'clinics-independent', 'clinics-public', 'clinics-unknown']
+            layers: getAllClinicInteractiveLayerIds()
         });
         if (clinicHit.length > 0) return;
         selectSA3(e.features[0].properties.SA3Code);
+    });
+
+    // Datasets-as-layers (plan Phase B): clicking a cluster zooms in until it
+    // splits, rather than selecting a clinic (clusters have no single clinic
+    // to select).
+    map.on('mouseenter', 'clinics-clusters', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'clinics-clusters', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'clinics-clusters', (e) => {
+        const feature = e.features[0];
+        const clusterId = feature.properties.cluster_id;
+        map.getSource(`clinics-${State.markets.current}`).getClusterExpansionZoom(clusterId, (err, zoom) => {
+            if (err) return;
+            map.easeTo({ center: feature.geometry.coordinates, zoom, duration: 500 });
+        });
     });
 
     ['clinics-corporate', 'clinics-independent', 'clinics-public', 'clinics-unknown'].forEach(layer => {
@@ -2536,6 +2845,61 @@ function wireMapInteractions() {
     });
 
     // SA2 SEIFA hover interactions are wired in ensureSEIFALayer() on first use
+}
+
+// Datasets-as-layers (plan Phase E) — every clinic layer id currently on
+// the map (primary + any active secondary layers), for the SA3-click
+// suppression check above. Computed live rather than cached since
+// secondary layers can be toggled on/off at any time.
+function getAllClinicInteractiveLayerIds() {
+    const ids = ['clinics-corporate', 'clinics-independent', 'clinics-public', 'clinics-unknown', 'clinics-clusters'];
+    State.activeClinicLayers.forEach((layer) => {
+        if (layer === State.markets.current) return;
+        ids.push(`clinics-${layer}-pins`, `clinics-${layer}-clusters`);
+    });
+    return ids;
+}
+
+// Hover/click wiring for a secondary (non-scoring) clinic layer — clicking
+// a cluster zooms in same as the primary layer; clicking a leaf pin opens
+// the existing clinic-select rail (no separate secondary-layer UI invented).
+function wireSecondaryClinicLayerEvents(layer) {
+    const tooltip = document.getElementById('map-tooltip');
+    const clusterLayerId = `clinics-${layer}-clusters`;
+    const pinLayerId = `clinics-${layer}-pins`;
+
+    map.on('mouseenter', clusterLayerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', clusterLayerId, () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', clusterLayerId, (e) => {
+        const feature = e.features[0];
+        const clusterId = feature.properties.cluster_id;
+        map.getSource(`clinics-${layer}`).getClusterExpansionZoom(clusterId, (err, zoom) => {
+            if (err) return;
+            map.easeTo({ center: feature.geometry.coordinates, zoom, duration: 500 });
+        });
+    });
+
+    map.on('mouseenter', pinLayerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mousemove', pinLayerId, (e) => {
+        if (!e.features.length) return;
+        const c = e.features[0].properties;
+        const location = c.sa3_name || c.suburb || c.City || '';
+        tooltip.innerHTML = `
+            <div class="map-tooltip-name">${c.clinic_name || 'Clinic'}</div>
+            <div class="map-tooltip-meta">${c['ownership'] || ''} · ${location}</div>
+        `;
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.point.x + 14) + 'px';
+        tooltip.style.top = (e.point.y + 14) + 'px';
+    });
+    map.on('mouseleave', pinLayerId, () => {
+        map.getCanvas().style.cursor = '';
+        tooltip.style.display = 'none';
+    });
+    map.on('click', pinLayerId, (e) => {
+        if (!e.features.length) return;
+        selectClinic(e.features[0].properties);
+    });
 }
 
 let lastSelectedId = null;
@@ -4733,6 +5097,7 @@ function updateWeightUI() {
     // Custom thesis badge
     const badge = document.getElementById('thesis-badge');
     if (badge) badge.style.display = isDefault ? 'none' : '';
+    renderFunnelSummaries();  // plan Phase C
 }
 
 function adjustWeight(changedKey, newValue) {
@@ -4814,6 +5179,7 @@ function applyWeights() {
 // ============================================================
 function updateRailStats() {
     if (!State.sa3Data) return;
+    const allCount = State.sa3Data.features.length; // plan Phase F: running count stage 1
     let features = State.sa3Data.features;
     if (State.currentState) {
         features = features.filter(f => f.properties.State === State.currentState);
@@ -4821,6 +5187,7 @@ function updateRailStats() {
     if (State.mmmFilter && State.mmmFilter.length) {
         features = features.filter(f => State.mmmFilter.includes(f.properties.MMM_Dominant));
     }
+    const afterGeoCount = features.length; // plan Phase F: running count stage 2
     if (State.dpaFilter.bonded && State.dpaFilter.gpImg) {
         features = features.filter(f => f.properties.DPA_Bonded && f.properties.DPA_GP_IMG);
     } else if (State.dpaFilter.bonded) {
@@ -4832,16 +5199,18 @@ function updateRailStats() {
         features = features.filter(f => (f.properties.Workforce_Risk_Score || 0) >= State.workforceRiskMin);
     }
 
-    let tier1 = 0, tier2 = 0, sum = 0, acquirable = 0;
+    let tier1 = 0, tier2 = 0, sum = 0, acquirable = 0, scoredCount = 0; // scoredCount: plan Phase F
     features.forEach(f => {
         const p = f.properties;
         if (p.Tier === 1) tier1++;
         if (p.Tier === 2) tier2++;
         sum += parseFloat(p.Composite_Score) || 0;
+        if (Number.isFinite(parseFloat(p.Composite_Score))) scoredCount++;
         const c = State.sa3ClinicCounts[p.SA3Code];
         if (c) acquirable += c.independent;
     });
     const avg = features.length > 0 ? sum / features.length : 0;
+    renderFunnelRegionCount(allCount, afterGeoCount, features.length, scoredCount); // plan Phase F
 
     const regionsTxt = features.length.toLocaleString('en-AU');
     const avgTxt = avg.toFixed(1);
@@ -5456,9 +5825,27 @@ function populateClinicChainsFilter() {
     }
 }
 
+// Step 1's scoring-market dropdown (plan Phase D) — single-select, calls
+// switchMarket() directly instead of round-tripping through index.html.
+function toggleMarketDropdown(forceOpen) {
+    const menu = document.getElementById('market-dropdown-menu');
+    const trigger = document.getElementById('market-dropdown-trigger');
+    if (!menu || !trigger) return;
+    const open = typeof forceOpen === 'boolean' ? forceOpen : !menu.classList.contains('open');
+    menu.classList.toggle('open', open);
+    trigger.setAttribute('aria-expanded', String(open));
+}
+
+async function selectScoringMarket(marketId) {
+    toggleMarketDropdown(false);
+    if (marketId === State.markets.current) return;
+    await switchMarket(marketId);
+}
+
 function wireMarketSelector() {
-    // Pill is now a plain <a href="home.html"> — no dropdown, no click handler needed.
-    // Switching markets is done by going back to the home page.
+    // Close the scoring-market dropdown on any outside click, mirroring the
+    // existing .lens-nra-menu pattern.
+    document.addEventListener('click', () => toggleMarketDropdown(false));
     wireMapSubTabs();
 }
 
@@ -5808,12 +6195,19 @@ function wireUI() {
         recomputeWorkforceScores();
     });
 
-    document.getElementById('layer-clinics').addEventListener('change', (e) => {
+    // NOTE: 'layer-clinics'/'layer-labels' checkboxes don't exist anywhere in
+    // map.html (pre-existing dead reference, unrelated to plan Phase C) —
+    // this was silently throwing on every page load and halting the rest of
+    // wireUI() before it ever ran. Guarded defensively, matching this
+    // function's own convention elsewhere (e.g. wfResetEl above).
+    const layerClinicsEl = document.getElementById('layer-clinics');
+    if (layerClinicsEl) layerClinicsEl.addEventListener('change', (e) => {
         const vis = e.target.checked ? 'visible' : 'none';
         ['clinics-corporate', 'clinics-independent', 'clinics-public'].forEach(id =>
             map.setLayoutProperty(id, 'visibility', vis));
     });
-    document.getElementById('layer-labels').addEventListener('change', (e) => {
+    const layerLabelsEl = document.getElementById('layer-labels');
+    if (layerLabelsEl) layerLabelsEl.addEventListener('change', (e) => {
         map.setLayoutProperty('clinics-labels', 'visibility', e.target.checked ? 'visible' : 'none');
     });
 
@@ -6023,34 +6417,80 @@ function wireUI() {
     const savedLens = localStorage.getItem('fh.lens');
     if (savedLens) setMapView(savedLens);
 
-    // Restore accordion open state
-    const savedGroups = JSON.parse(localStorage.getItem('fh.groups.open') || '{"filter":true,"thesis":false,"display":false}');
-    ['filter', 'thesis', 'display'].forEach(id => {
-        if (!savedGroups[id]) {
-            document.getElementById('acc-body-' + id)?.classList.add('collapsed');
-            const arrow = document.getElementById('acc-arrow-' + id);
-            if (arrow) arrow.textContent = '▸';
+    // Funnel rail (plan Phase C) always starts at step 1 — the HTML's own
+    // default classes (step 1 open, steps 2-4 collapsed) are correct as-is;
+    // just sync each step's summary visibility to match on load.
+    FUNNEL_STEP_IDS.forEach((stepId) => {
+        const stepBody = document.getElementById('acc-body-' + stepId);
+        const stepSummary = document.getElementById('funnel-summary-' + stepId);
+        if (stepBody && stepSummary) {
+            stepSummary.style.display = stepBody.classList.contains('collapsed') ? '' : 'none';
         }
     });
+    renderFunnelSummaries();
 
     // Populate clinic chains filter after all UI is wired up
     populateClinicChainsFilter();
 }
 
 // ============================================================
-// Accordion toggle
+// Accordion toggle — Datasets-as-layers (plan Phase C): the left rail is
+// now a 4-step funnel ('clinics' / 'geo' / 'ground' / 'thesis', in that
+// order — "always the same order," one step open at a time, per the design
+// canvas). Opening one step force-collapses the other three rather than
+// each accordion toggling independently. No open/closed state is persisted
+// across loads — the funnel always starts back at step 1, matching the
+// "forcing function" intent rather than restoring an arbitrary prior state.
 // ============================================================
+const FUNNEL_STEP_IDS = ['clinics', 'geo', 'ground', 'thesis'];
 function toggleAccordion(id) {
     const body = document.getElementById('acc-body-' + id);
-    const arrow = document.getElementById('acc-arrow-' + id);
     if (!body) return;
-    const collapsed = body.classList.toggle('collapsed');
-    if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
+    const opening = body.classList.contains('collapsed');
+    FUNNEL_STEP_IDS.forEach((stepId) => {
+        const stepBody = document.getElementById('acc-body-' + stepId);
+        const stepArrow = document.getElementById('acc-arrow-' + stepId);
+        const stepSummary = document.getElementById('funnel-summary-' + stepId);
+        if (!stepBody) return;
+        const shouldOpen = opening && stepId === id;
+        stepBody.classList.toggle('collapsed', !shouldOpen);
+        if (stepArrow) stepArrow.textContent = shouldOpen ? '▾' : '▸';
+        if (stepSummary) stepSummary.style.display = shouldOpen ? 'none' : '';
+    });
+    renderFunnelSummaries();
+}
 
-    // Persist open/close state
-    const saved = JSON.parse(localStorage.getItem('fh.groups.open') || '{}');
-    saved[id] = !collapsed;
-    localStorage.setItem('fh.groups.open', JSON.stringify(saved));
+// One-line "current answer" shown under each collapsed funnel step.
+function renderFunnelSummaries() {
+    const marketName = State.markets.config?.market_name || (State.markets.current || 'gp').toUpperCase();
+    const archCount = (State.archetypeFilter.format.length + State.archetypeFilter.billing.length + State.archetypeFilter.ownership.length);
+    const chainCount = (State.clinicChainFilter || []).length;
+    const filterCount = archCount + chainCount;
+    const extraLayers = (State.activeClinicLayers || []).length - 1; // plan Phase E
+    const s1 = document.getElementById('funnel-summary-clinics');
+    if (s1) s1.textContent = `${marketName}` +
+        (extraLayers > 0 ? ` · +${extraLayers} layer${extraLayers === 1 ? '' : 's'}` : '') +
+        (filterCount ? ` · ${filterCount} filter${filterCount === 1 ? '' : 's'} active` : '');
+
+    const s2 = document.getElementById('funnel-summary-geo');
+    if (s2) {
+        const state = State.currentState || 'All Australia';
+        const mmm = (State.mmmFilter || []).length ? `MMM ${State.mmmFilter.join(',')}` : 'all remoteness';
+        s2.textContent = `${state} · ${mmm}`;
+    }
+
+    const s3 = document.getElementById('funnel-summary-ground');
+    if (s3) {
+        const seifa = (State.seifaDeciles || []).length ? `SEIFA decile ${State.seifaDeciles.join(',')}` : 'all SEIFA deciles';
+        const wf = State.workforceRiskMin > 0 ? ` · workforce risk ≥${State.workforceRiskMin}` : '';
+        s3.textContent = `${seifa}${wf}`;
+    }
+
+    const s4 = document.getElementById('funnel-summary-thesis');
+    if (s4) {
+        const w = State.weights;
+        s4.textContent = `Demand ${Math.round(w.demand)}% · Supply ${Math.round(w.supply)}% · Competition ${Math.round(w.competition)}% · Economics ${Math.round(w.economics)}%`;
+    }
 }
 
 // ============================================================
@@ -6095,6 +6535,7 @@ function saveLensState(view) {
 // Active filter chips
 // ============================================================
 function updateFilterChips() {
+    renderFunnelSummaries();  // plan Phase C: every filter-change choke point also refreshes the funnel's collapsed-step summaries
     const chips = [];
 
     if (State.currentState) chips.push({ label: State.currentState, key: 'state' });
@@ -7386,7 +7827,11 @@ function renderBasicClinicInfo(clinic) {
     // Don't show backdrop — keep map interactive for second clinic selection
 
     const archetype = getClinicArchetype(clinic);
-    const market = State.markets.current || 'gp';
+    // Datasets-as-layers (plan Phase E): clicked clinic may belong to a
+    // secondary clinic layer, not the scoring market — use its own tagged
+    // vertical (set in switchMarket()/toggleClinicLayer()) so a Physio pin
+    // clicked while GP is the scoring market doesn't get labelled "GP Clinic".
+    const market = clinic._layer || State.markets.current || 'gp';
 
     panel.innerHTML = `
         <div class="rd-root">
