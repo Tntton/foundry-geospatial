@@ -18,7 +18,7 @@
     <!-- Supabase Auth -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=mob8" />
+    <link rel="stylesheet" href="css/styles.css?v=mob15" />
     <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
     <style>
         /* Hide login buttons */
@@ -181,7 +181,26 @@
         <div style="flex:1;"></div>
 
         <div class="actions">
+            <!-- Global search — relocated from the rail's sticky header to
+                 the top-right of the app header (plan Phase G). Same ids/JS
+                 wiring, just moved. -->
+            <div class="global-search-wrap">
+                <div class="global-search">
+                    <svg class="global-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+                        <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                    <input type="text" id="global-search-input" class="global-search-input" placeholder="Search SA3, clinic, chain…" autocomplete="off" />
+                    <kbd class="global-search-kbd">⌘K</kbd>
+                    <button id="global-search-clear" class="global-search-clear" style="display:none">✕</button>
+                </div>
+                <div class="global-search-results" id="global-search-results"></div>
+                <!-- Legacy clinic search state hooks (hidden) -->
+                <div id="clinic-search-results" style="display:none"><div id="clinic-search-results-list"></div></div>
+                <div id="clinic-search-status" style="display:none"></div>
+            </div>
             <span class="action-meta">Data vintage · Mar 2025</span>
+            <a class="nav-btn" href="#" onclick="window.location.href='methodology.html?market='+(window.State?.markets?.current||'gp'); return false;" style="text-decoration:none; color:inherit; cursor:pointer; display:flex; align-items:center;">Methodology</a>
             <button id="login-btn" class="nav-btn login">Login</button>
             <button id="logout-btn" class="nav-btn logout" style="display: none;">Logout</button>
         </div>
@@ -205,8 +224,8 @@
     <div class="mob-lens-scroller" id="mob-lens-scroller">
         <button class="mob-lens-chip lens-seg active" data-lens="composite">Composite</button>
         <button class="mob-lens-chip lens-seg" data-lens="whitespace">Whitespace</button>
-        <button class="mob-lens-chip lens-seg" data-lens="seifa">SEIFA</button>
         <button class="mob-lens-chip lens-seg" data-lens="workforce">Workforce</button>
+        <span id="mob-catalogue-lens-chips"></span>
         <button class="mob-lens-chip mob-lens-nra" id="mob-lens-nra-btn">GP Billings <span class="mob-lens-arrow">▾</span></button>
         <button class="mob-search-btn" id="mob-search-btn" aria-label="Search">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -482,59 +501,23 @@
         <!-- ====================== Map view ====================== -->
         <section class="view view-map active" data-view="map">
 
-            <!-- Map / List sub-tab bar -->
-            <div class="map-subbar" id="map-subbar">
-                <div class="map-subtabs">
-                    <button class="map-subtab active" id="subtab-map" data-subtab="map">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M4 7l2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        Map
-                    </button>
-                    <button class="map-subtab" id="subtab-list" data-subtab="list">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M2 7h10M2 10h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-                        List
-                    </button>
-                    <button class="map-subtab" id="subtab-targets" data-subtab="targets">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="2.5" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="0.8" fill="currentColor"/></svg>
-                        Targets
-                    </button>
-                </div>
-                <span class="map-subbar-count" id="map-subbar-count"></span>
-                <a class="subbar-methodology-btn nav-btn" href="#" onclick="window.location.href='methodology.html?market='+(window.State?.markets?.current||'gp'); return false;" style="text-decoration:none; color:inherit; cursor:pointer; display:flex; align-items:center;">Methodology</a>
-            </div>
+            <!-- Persistent body row (plan Phase G) — the rail stays visible
+                 across Map/List/Targets; only the panel to its right swaps.
+                 Replaces the old layout where the rail lived only inside
+                 #subpanel-map and vanished on List/Targets. -->
+            <div class="map-body-row" id="map-body-row">
 
-            <!-- Map panel (shown when subtab=map) -->
-            <div class="map-subpanel" id="subpanel-map">
-
-            <!-- Left rail -->
+            <!-- Left rail — persistent across all 3 "Read it as" tabs -->
             <aside class="map-rail" id="map-rail">
 
-                <!-- ── STICKY HEADER ────────────────────────────────── -->
-                <div class="rail-sticky">
-                    <!-- "Colour by" lens chips relocated below the funnel (plan
-                         Phase F) — see the acc-row right before Legend Display. -->
+                <!-- Sticky search header removed (plan Phase G) — the global
+                     search box moved to the top-right of the main app
+                     header, see #global-search-wrap there. -->
 
-                    <div class="global-search-wrap">
-                        <div class="global-search">
-                            <svg class="global-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none">
-                                <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
-                                <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                            </svg>
-                            <input type="text" id="global-search-input" class="global-search-input" placeholder="Search SA3, clinic, chain…" autocomplete="off" />
-                            <kbd class="global-search-kbd">⌘K</kbd>
-                            <button id="global-search-clear" class="global-search-clear" style="display:none">✕</button>
-                        </div>
-                        <div class="global-search-results" id="global-search-results"></div>
-                        <!-- Legacy clinic search state hooks (hidden) -->
-                        <div id="clinic-search-results" style="display:none"><div id="clinic-search-results-list"></div></div>
-                        <div id="clinic-search-status" style="display:none"></div>
-                    </div>
-                </div>
-
-                <!-- ── SAVED VIEWS ───────────────────────────────────── -->
-                <div class="rail-section rail-presets-section">
-                    <div class="rail-eyebrow">Saved views <button class="preset-new-btn" id="preset-new-btn">+ New</button></div>
-                    <div class="preset-cards" id="preset-cards"></div>
-                </div>
+                <!-- Saved Views removed per design review — the funnel's own
+                     "What's left" numbers plus one-line step summaries already
+                     show current state; a separate presets rail added a
+                     second, redundant "current state" surface. -->
 
                 <!-- ── ACTIVE FILTER CHIPS ───────────────────────────── -->
                 <div class="filter-chips-strip" id="filter-chips-strip" style="display:none">
@@ -554,9 +537,9 @@
                 <!-- ── STEP 1: What are you buying? ──────── -->
                 <div class="rail-accordion funnel-step" id="acc-clinics">
                     <div class="rail-accordion-hdr" onclick="toggleAccordion('clinics')">
-                        <span class="rail-accordion-arrow" id="acc-arrow-clinics">▾</span>
                         <span class="funnel-step-num">1</span>
                         <span class="rail-accordion-title">What are you buying?</span>
+                        <span class="rail-accordion-arrow" id="acc-arrow-clinics">▾</span>
                     </div>
                     <div class="funnel-step-summary" id="funnel-summary-clinics"></div>
                     <div class="rail-accordion-body" id="acc-body-clinics">
@@ -587,23 +570,20 @@
                         <div class="acc-row">
                             <div class="rail-eyebrow">Clinic layers on map</div>
                             <div class="mmm-chip-grid clinic-layer-grid" id="clinic-layer-toggles">
-                                <label class="mmm-chip-label"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span>General Practice</span></label>
-                                <label class="mmm-chip-label"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span>Physiotherapy</span></label>
-                                <label class="mmm-chip-label"><input type="checkbox" class="clinic-layer-toggle" data-layer="dental" onchange="toggleClinicLayer('dental', this.checked)"><span>Dental</span></label>
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span class="clinic-layer-row-name">General Practice</span><span class="clinic-layer-count" id="clinic-layer-count-gp"></span></label>
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span class="clinic-layer-row-name">Physiotherapy</span><span class="clinic-layer-count" id="clinic-layer-count-physio"></span></label>
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="dental" onchange="toggleClinicLayer('dental', this.checked)"><span class="clinic-layer-row-name">Dental</span><span class="clinic-layer-count" id="clinic-layer-count-dental"></span></label>
                             </div>
                         </div>
 
-                        <!-- Major chains section — scoped to the scoring market only;
-                             secondary clinic layers above don't get chain/archetype
-                             filter panels (deferred, see plan Phase E note). -->
-                        <div class="acc-row">
-                            <div class="rail-eyebrow">Major chains <button class="acc-reset-link hidden" id="clinic-chains-reset">Reset</button></div>
-                            <div class="clinic-chains-grid" id="clinic-chains-grid"></div>
-                        </div>
+                        <!-- Major chains section removed (plan Phase G) — chain-level
+                             detail now lives in the Targets tab's chain dossier
+                             instead of duplicating it here as a filter. -->
 
                         <!-- Archetype section -->
                         <div class="acc-row" id="archetype-filter-section">
-                            <div class="rail-eyebrow" title="AND logic across dimensions — none selected = all shown">Archetype <button class="acc-reset-link" id="archetype-reset" style="display:none">Reset</button></div>
+                            <div class="rail-eyebrow" title="AND logic across dimensions — none selected = all shown">Narrow the clinics <button class="acc-reset-link" id="archetype-reset" style="display:none">Reset</button></div>
+                            <div class="acc-hint" style="margin-bottom:6px">Clinic filters live here, not in a separate place — narrowing which practices you'd buy is part of deciding what you're buying.</div>
                             <div id="archetype-content">
                                 <div class="acc-sublabel">Format</div>
                                 <div class="mmm-chip-grid archetype-chip-grid">
@@ -631,9 +611,9 @@
                 <!-- ── STEP 2: Where are you looking? ──────── -->
                 <div class="rail-accordion funnel-step" id="acc-geo">
                     <div class="rail-accordion-hdr" onclick="toggleAccordion('geo')">
-                        <span class="rail-accordion-arrow" id="acc-arrow-geo">▸</span>
                         <span class="funnel-step-num">2</span>
                         <span class="rail-accordion-title">Where are you looking?</span>
+                        <span class="rail-accordion-arrow" id="acc-arrow-geo">▸</span>
                     </div>
                     <div class="funnel-step-summary" id="funnel-summary-geo"></div>
                     <div class="rail-accordion-body collapsed" id="acc-body-geo">
@@ -654,33 +634,45 @@
                         </div>
 
                         <div class="acc-row">
-                            <div class="rail-eyebrow" title="MMM remoteness class 1 (major cities) to 7 (very remote). AND logic with SEIFA in the next step — none selected = all shown.">Remoteness</div>
-                            <div class="acc-sublabel">MMM class</div>
-                            <div class="mmm-chip-grid">
-                                <label class="mmm-chip-label" title="MM1 · Major cities"><input type="checkbox" class="mmm-chip" value="1"><span>1</span></label>
-                                <label class="mmm-chip-label" title="MM2 · Inner regional"><input type="checkbox" class="mmm-chip" value="2"><span>2</span></label>
-                                <label class="mmm-chip-label" title="MM3 · Large rural"><input type="checkbox" class="mmm-chip" value="3"><span>3</span></label>
-                                <label class="mmm-chip-label" title="MM4 · Medium rural"><input type="checkbox" class="mmm-chip" value="4"><span>4</span></label>
-                                <label class="mmm-chip-label" title="MM5 · Small rural"><input type="checkbox" class="mmm-chip" value="5"><span>5</span></label>
-                                <label class="mmm-chip-label" title="MM6 · Remote"><input type="checkbox" class="mmm-chip" value="6"><span>6</span></label>
-                                <label class="mmm-chip-label" title="MM7 · Very remote"><input type="checkbox" class="mmm-chip" value="7"><span>7</span></label>
+                            <div class="rail-eyebrow" title="MMM remoteness class 1 (major cities) to 7 (very remote). AND logic with SEIFA in the next step — none selected = all shown.">Remoteness · MMM class</div>
+                            <div class="mmm-remoteness-grid">
+                                <label class="mmm-remoteness-btn" title="MM1 · Major cities"><input type="checkbox" class="mmm-chip" value="1"><span>1 Metro</span></label>
+                                <label class="mmm-remoteness-btn" title="MM2 · Inner regional"><input type="checkbox" class="mmm-chip" value="2"><span>2 Regional centre</span></label>
+                                <label class="mmm-remoteness-btn" title="MM3 · Large rural"><input type="checkbox" class="mmm-chip" value="3"><span>3 Large town</span></label>
+                                <label class="mmm-remoteness-btn" title="MM4 · Medium rural"><input type="checkbox" class="mmm-chip" value="4"><span>4 Medium town</span></label>
+                                <label class="mmm-remoteness-btn" title="MM5 · Small rural"><input type="checkbox" class="mmm-chip" value="5"><span>5 Small town</span></label>
+                                <label class="mmm-remoteness-btn" title="MM6-7 · Remote & very remote"><input type="checkbox" class="mmm-chip" value="6,7"><span>6-7 Remote</span></label>
                             </div>
+                            <div class="acc-hint">The bluntest cut, and the one you already have an opinion about. Everything below operates on what survives here.</div>
                         </div>
 
                     </div>
                 </div>
 
-                <!-- ── STEP 3: What kind of ground? ──────── -->
+                <!-- ── STEP 3: What kind of economics? ──────── -->
                 <div class="rail-accordion funnel-step" id="acc-ground">
                     <div class="rail-accordion-hdr" onclick="toggleAccordion('ground')">
-                        <span class="rail-accordion-arrow" id="acc-arrow-ground">▸</span>
                         <span class="funnel-step-num">3</span>
-                        <span class="rail-accordion-title">What kind of ground?</span>
+                        <span class="rail-accordion-title">What kind of economics?</span>
+                        <span class="rail-accordion-arrow" id="acc-arrow-ground">▸</span>
                     </div>
                     <div class="funnel-step-summary" id="funnel-summary-ground"></div>
                     <div class="rail-accordion-body collapsed" id="acc-body-ground">
 
-                        <div class="acc-row" id="ses-remoteness-section">
+                        <!-- Data Catalogue entry point (plan Phase G) — Step 3 ships
+                             with nothing loaded by default; SEIFA/workforce below are
+                             hidden until explicitly added, matching the reference
+                             design instead of the old always-visible defaults. -->
+                        <div class="acc-row">
+                            <div class="acc-hint" style="margin-bottom:8px">Demand, economics and competition, from the catalogue. Each one narrows; any one can also colour the map.</div>
+                            <div class="catalogue-empty-state" id="catalogue-ground-empty">
+                                Nothing loaded. Add demand, competition or economics data from the catalogue and it becomes a filter here.
+                            </div>
+                            <button class="acc-catalogue-btn" id="ground-add-from-catalogue" onclick="openDataCatalogue()">Add from catalogue</button>
+                        </div>
+
+                        <div class="acc-row hidden" id="ses-remoteness-section">
+                            <div class="catalogue-dataset-controls" id="seifa-dataset-controls"></div>
                             <div class="rail-eyebrow" title="SEIFA IRSAD socioeconomic index, 1 (most disadvantaged) to 10 (most advantaged). AND logic with MMM in the previous step — none selected = all shown.">SEIFA IRSAD decile</div>
                             <div class="seifa-chip-grid" id="seifa-chip-grid">
                                 <label class="seifa-chip-label" title="Decile 1 — most disadvantaged"><input type="checkbox" class="seifa-chip" value="1"><span>1</span></label>
@@ -697,7 +689,8 @@
                             <div class="acc-hint">SEIFA: 1=disadvantaged, 10=advantaged · selecting any decile auto-switches lens to SEIFA</div>
                         </div>
 
-                        <div class="acc-row" id="workforce-section">
+                        <div class="acc-row hidden" id="workforce-section">
+                            <div class="catalogue-dataset-controls" id="workforce-dataset-controls"></div>
                             <div class="rail-eyebrow" title="DPA flags from DoctorConnect 2020 spatial intersection. Workforce risk: composite of supply density, age profile, and DPA status.">Workforce flags</div>
                             <div class="dpa-chip-grid">
                                 <label class="mmm-chip-label"><input type="checkbox" id="dpa-bonded"><span>DPA Bonded</span></label>
@@ -710,7 +703,7 @@
                             <input type="range" class="seifa-slider" id="workforce-risk-slider" min="0" max="100" step="5" value="0" style="width:100%" />
                         </div>
 
-                        <div class="acc-row">
+                        <div class="acc-row hidden" id="ground-extra-filters">
                             <button class="acc-link" id="data-quality-toggle">Data-quality filters ▸</button>
                             <div class="data-quality-sub" id="data-quality-sub" style="display:none">
                                 <div class="mmm-chip-grid archetype-chip-grid" style="grid-template-columns:1fr 1fr;margin-top:6px">
@@ -729,10 +722,10 @@
                 <!-- ── STEP 4: What matters most? ──────── -->
                 <div class="rail-accordion funnel-step" id="acc-thesis">
                     <div class="rail-accordion-hdr" onclick="toggleAccordion('thesis')">
-                        <span class="rail-accordion-arrow" id="acc-arrow-thesis">▸</span>
                         <span class="funnel-step-num">4</span>
                         <span class="rail-accordion-title">What matters most?</span>
                         <span class="thesis-badge" id="thesis-badge" style="display:none">custom</span>
+                        <span class="rail-accordion-arrow" id="acc-arrow-thesis">▸</span>
                     </div>
                     <div class="funnel-step-summary" id="funnel-summary-thesis"></div>
                     <div class="rail-accordion-body collapsed" id="acc-body-thesis">
@@ -808,17 +801,35 @@
                     <div class="funnel-region-count" id="funnel-region-count"></div>
                 </div>
 
-                <!-- ── Colour by (relocated from the sticky header, plan Phase F)
-                     — same #lens-control/#lens-nra-* ids, same JS wiring,
-                     just moved below the funnel per the resolved design. -->
+                <!-- ── Read it as (plan Phase G) — relocated from the old top
+                     subbar; same #subtab-*/.map-subtab ids/classes and JS
+                     wiring (wireMapSubTabs()), just moved into the rail. The
+                     rail itself is now persistent across all 3 (plan Phase G
+                     map-body-row restructure), so these stay reachable. -->
+                <div class="acc-row">
+                    <div class="rail-eyebrow">Read it as</div>
+                    <div class="map-subtabs" id="map-subtabs">
+                        <button class="map-subtab active" id="subtab-map" data-subtab="map">Map</button>
+                        <button class="map-subtab" id="subtab-list" data-subtab="list">List</button>
+                        <button class="map-subtab" id="subtab-targets" data-subtab="targets">Targets</button>
+                    </div>
+                    <span class="map-subbar-count" id="map-subbar-count"></span>
+                </div>
+
+                <!-- ── Colour by (relocated from the sticky header, plan Phase F;
+                     trimmed to 3 fixed lenses, plan Phase G — SEIFA and GP
+                     Billings are catalogue-loaded datasets now, see Step 3;
+                     loading one dynamically appends a chip here, see
+                     renderCatalogueColourByChips()) — same #lens-control id,
+                     same JS wiring, just moved below the funnel. -->
                 <div class="acc-row">
                     <div class="rail-eyebrow">Colour by</div>
                     <div class="lens-control" id="lens-control">
                         <button class="lens-seg active" data-lens="composite">Composite</button>
                         <button class="lens-seg" data-lens="whitespace">Whitespace</button>
-                        <button class="lens-seg" data-lens="seifa">SEIFA</button>
                         <button class="lens-seg" data-lens="workforce">Workforce</button>
-                        <div class="lens-nra-wrap">
+                        <span id="catalogue-lens-chips"></span>
+                        <div class="lens-nra-wrap hidden" id="lens-nra-wrap">
                             <button class="lens-seg lens-nra-trigger" id="lens-nra-trigger">GP Billings <span class="lens-nra-arrow">▾</span></button>
                             <div class="lens-nra-menu" id="lens-nra-menu">
                                 <button class="lens-nra-item" data-lens="nra-fees-per-service">Avg fees per service</button>
@@ -862,6 +873,8 @@
 
             </aside>
 
+            <!-- Map panel (shown when "Read it as" = Map) -->
+            <div class="map-subpanel" id="subpanel-map">
 
             <!-- Map container -->
             <div class="map-container">
@@ -991,66 +1004,61 @@
 
             </div>
 
-            <!-- Targets panel (shown when subtab=targets) -->
+            <!-- Targets panel (shown when subtab=targets) — chain dossier
+                 (plan Phase G): "targets is the same slice read as owners
+                 rather than as ground." One row per real chain
+                 (State.uniqueClinicChains), classified by reusing the
+                 existing TP.scoreOf()/bandOf() score bands. -->
             <div class="map-subpanel" id="subpanel-targets" style="display:none; flex:1; overflow:hidden; flex-direction:column; overflow-y:auto;">
 
-                <!-- Strip: scope + export shortlist -->
-                <div class="tp-strip">
-                    <div class="tp-strip-left">
-                        <span class="tp-strip-label">SCOPE</span>
-                        <select id="tp-scope-state" class="tp-select">
-                            <option value="">National</option>
-                            <option value="NSW">NSW</option>
-                            <option value="VIC">VIC</option>
-                            <option value="QLD">QLD</option>
-                            <option value="WA">WA</option>
-                            <option value="SA">SA</option>
-                            <option value="TAS">TAS</option>
-                        </select>
+                <div class="td-strip">
+                    <div class="td-strip-left">
+                        <div class="market-dropdown" id="td-layer-dropdown">
+                            <button type="button" class="td-layer-trigger" id="td-layer-trigger" onclick="event.stopPropagation(); TP.toggleLayerDropdown();">
+                                <span id="td-layer-label">GP Clinics</span>
+                                <span class="market-dropdown-caret" aria-hidden="true">▾</span>
+                            </button>
+                            <div class="market-dropdown-menu" id="td-layer-menu"></div>
+                        </div>
                     </div>
-                    <div class="tp-strip-right">
-                        <button class="tp-btn-ghost" id="tp-export-shortlist">⇩ Export shortlist</button>
-                    </div>
+                    <div class="td-strip-right" id="td-summary"></div>
                 </div>
 
-                <!-- HERO: Priority ranked list -->
-                <section class="tp-hero">
-                    <div class="tp-hero-head">
-                        <div>
-                            <div class="tp-eyebrow">PRIORITY TARGETS · RANKED BY ACQUISITION ATTRACTIVENESS</div>
-                            <h2 class="tp-hero-title" id="tp-hero-title">Platform acquisitions</h2>
-                            <p class="tp-hero-sub" id="tp-hero-sub">Ranked by Target Score — a weighted composite of Deliverability, Asset quality, Platform potential and Strategic fit.</p>
-                        </div>
-                        <div class="tp-mode-toggle">
-                            <span class="tp-mode-label">I'm looking for</span>
-                            <div class="tp-toggle-group">
-                                <button class="tp-toggle active" data-mode="platform">A platform</button>
-                                <button class="tp-toggle" data-mode="bolton">Bolt-ons</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="tp-key">
-                        <div class="tp-key-chips">
-                            <span class="tp-key-chip" style="background:#465E4D">Deliverability</span>
-                            <span class="tp-key-chip" style="background:#6E9277">Asset quality</span>
-                            <span class="tp-key-chip" style="background:#97C777;color:#000">Platform potential</span>
-                            <span class="tp-key-chip" style="background:#C5E0B3;color:#000">Strategic fit</span>
-                        </div>
-                        <span class="tp-key-note">← Target Score = weighted sum of these four</span>
-                    </div>
-                    <div class="tp-list" id="tp-list"></div>
-                </section>
+                <div class="td-filter-row">
+                    <div class="td-filter-chips" id="td-filter-chips"></div>
+                    <span class="td-filter-note">Every chain we have classified in this vertical</span>
+                </div>
 
-                <!-- WEIGHTING CONTROL -->
-                <section class="tp-weights">
-                    <div class="tp-weights-head">
-                        <div class="tp-weights-title">TARGET SCORE = WEIGHTED SUM OF 4 DIMENSIONS</div>
-                        <button class="tp-btn-ghost" id="tp-reset-weights">Reset to Foundry base</button>
-                    </div>
-                    <div class="tp-dims" id="tp-dims"></div>
-                </section>
+                <div class="td-table-wrap">
+                    <table class="td-table">
+                        <thead>
+                            <tr>
+                                <th>Chain</th>
+                                <th>Category</th>
+                                <th>Sites</th>
+                                <th>In your slice</th>
+                                <th>Tier 1-2 footprint</th>
+                                <th>Archetype</th>
+                                <th>Billing</th>
+                                <th>Ownership</th>
+                                <th>States</th>
+                            </tr>
+                        </thead>
+                        <tbody id="td-tbody"></tbody>
+                    </table>
+                </div>
+
+                <div class="td-footnote">
+                    Same slice, three readings. <strong>Map</strong> is where. <strong>List</strong> is what about each region.
+                    <strong>Targets</strong> is who already owns it. Change steps 1–3 and all three move together — the
+                    category column is ours, the "in your slice" column is yours. Sites counts the chain's practices in
+                    this vertical only; with nothing filtered, in your slice equals it.
+                    <span id="td-deliver-note"></span>
+                </div>
 
             </div><!-- /subpanel-targets -->
+
+            </div><!-- /map-body-row -->
 
         </section>
 
@@ -1949,8 +1957,40 @@
 
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
 <div id="toast" class="toast hidden"></div>
-<script src="js/app.js?v=rr23"></script>
-<script src="js/components/targets-tab.js?v=rr3"></script>
+
+<!-- ============================================================
+     Data Catalogue (plan Phase G) — grouped by the composite's own 4
+     dimensions, not by who published it. "Required by the model" rows are
+     informational (the same weight-row-hint text already shown in Step 4,
+     "What matters most?") — they're baked into every score, not a
+     separate toggle. Optional rows are genuinely loadable, using only
+     data this app actually has (SEIFA IRSAD decile, workforce risk/DPA
+     flags, GP Billings sub-metrics) — the mockup's illustrative datasets
+     (population projections, disease prevalence, etc.) aren't real data
+     here and are not reproduced.
+     ============================================================ -->
+<div class="catalogue-modal-backdrop hidden" id="catalogue-modal-backdrop">
+    <div class="catalogue-modal" id="catalogue-modal" role="dialog" aria-modal="true" aria-label="Data catalogue">
+        <div class="catalogue-modal-hdr">
+            <div>
+                <div class="catalogue-modal-title">Data catalogue</div>
+                <div class="catalogue-modal-sub">Grouped by the economic driver it feeds. Region statistics become filters here — and can also colour the map.</div>
+            </div>
+            <button class="catalogue-modal-close" onclick="closeDataCatalogue()" aria-label="Close">✕</button>
+        </div>
+        <div class="catalogue-modal-content">
+            <div class="catalogue-modal-nav" id="catalogue-modal-nav"></div>
+            <div class="catalogue-modal-detail" id="catalogue-modal-detail"></div>
+        </div>
+        <div class="catalogue-modal-footer">
+            <span class="catalogue-staged-status" id="catalogue-staged-status">No changes staged</span>
+            <button class="acc-reset-link" onclick="closeDataCatalogue()">Cancel</button>
+            <button class="btn btn-primary" id="catalogue-load-btn" onclick="loadDataCatalogueSelections()" disabled>Load</button>
+        </div>
+    </div>
+</div>
+<script src="js/app.js?v=rr30"></script>
+<script src="js/components/targets-tab.js?v=rr7"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 
 <script>

@@ -558,6 +558,212 @@ const TP = {
     if (savedW) try { this.weights = JSON.parse(savedW); } catch(e){}
     if (savedM) this.mode = savedM;
     if (savedS) try { this.shortlist = new Set(JSON.parse(savedS)); } catch(e){}
+  },
+
+  // ============================================================
+  // Chain dossier (plan Phase G) — "Targets is the same slice read as
+  // owners rather than as ground." One row per real chain (from the
+  // currently-selected clinic layer's data), not a hardcoded list.
+  // Category (Platform/Bolt-on/Watch/Out of scope) reuses this file's own
+  // existing scoreOf()/bandOf() score bands (>=62 high, >=50 watch, below
+  // deprioritize — see bandOf() above), split further by site count to
+  // separate Platform from Bolt-on within the "high" band. Chains that
+  // match one of the hand-curated PLATFORM entries above reuse its real
+  // deliver/quality/platform/fit scores; every other chain gets
+  // quality/platform/fit computed from real clinic/SA3 data, with
+  // deliverability (which needs ownership-timeline data this app doesn't
+  // have for most chains) treated as neutral/unknown and flagged as such
+  // — not fabricated to look precise.
+  // ============================================================
+  CHAIN_DOSSIER: { layer: 'gp', filter: 'all', rows: [] },
+  CATEGORY_LABELS: { platform: 'Platform', bolton: 'Bolt-on', watch: 'Watch', outofscope: 'Out of scope' },
+
+  buildTierLookup() {
+    const map = {};
+    (State.sa3Data?.features || []).forEach((f) => {
+      const code = String(f.properties.SA3Code || '').trim();
+      map[code] = parseInt(f.properties.Tier) || null;
+    });
+    return map;
+  },
+
+  // SA3 codes currently passing Step 2/3's geography+ground filters —
+  // mirrors updateRailStats()'s own filter chain in app.js so "in your
+  // slice" moves in lockstep with the funnel, not a separate computation.
+  currentSlicePassingSA3Codes() {
+    if (!State.sa3Data) return null;
+    let features = State.sa3Data.features;
+    if (State.currentState) features = features.filter((f) => f.properties.State === State.currentState);
+    if (State.mmmFilter && State.mmmFilter.length) features = features.filter((f) => State.mmmFilter.includes(f.properties.MMM_Dominant));
+    if (State.dpaFilter?.bonded) features = features.filter((f) => f.properties.DPA_Bonded);
+    if (State.dpaFilter?.gpImg) features = features.filter((f) => f.properties.DPA_GP_IMG);
+    if (State.workforceRiskMin > 0) features = features.filter((f) => (f.properties.Workforce_Risk_Score || 0) >= State.workforceRiskMin);
+    return new Set(features.map((f) => String(f.properties.SA3Code).trim()));
+  },
+
+  mostCommon(arr) {
+    const counts = {};
+    arr.forEach((v) => { if (v) counts[v] = (counts[v] || 0) + 1; });
+    let best = null, bestCount = 0;
+    Object.entries(counts).forEach(([k, c]) => { if (c > bestCount) { best = k; bestCount = c; } });
+    return best;
+  },
+
+  shareOf(arr, field, value) {
+    if (!arr.length) return 0;
+    return arr.filter((c) => c[field] === value).length / arr.length;
+  },
+
+  classifyChain(score, sites) {
+    if (score < 50) return 'outofscope';
+    if (score < 62) return 'watch';
+    return sites >= 20 ? 'platform' : 'bolton';
+  },
+
+  // "Corporate Chain" also carries non-entity bucket labels for clinics
+  // with no identifiable owner (independents, NGOs) — these aren't real
+  // acquisition targets, so the dossier excludes them rather than listing
+  // a fake "chain" of thousands of unrelated independent sites.
+  NON_ENTITY_CHAIN_NAMES: new Set(['independent', 'ngo', 'unknown', 'n/a', 'public', 'government', 'not classified']),
+
+  buildChainDossier(layer) {
+    const clinics = (State.clinicsByVertical && State.clinicsByVertical[layer]) || [];
+    if (!clinics.length) return [];
+    const tierLookup = this.buildTierLookup();
+    const slicePassing = this.currentSlicePassingSA3Codes();
+
+    const byChain = {};
+    clinics.forEach((c) => {
+      const chain = (c['Corporate Chain'] || '').trim();
+      if (!chain || this.NON_ENTITY_CHAIN_NAMES.has(chain.toLowerCase())) return;
+      (byChain[chain] = byChain[chain] || []).push(c);
+    });
+
+    const maxSites = Math.max(1, ...Object.values(byChain).map((a) => a.length));
+
+    return Object.entries(byChain).map(([name, chainClinics]) => {
+      const sites = chainClinics.length;
+      const sliceClinics = slicePassing
+        ? chainClinics.filter((c) => slicePassing.has(String(c.sa3_code || '').trim()))
+        : chainClinics;
+      const inSlice = sliceClinics.length;
+      const tier12Count = sliceClinics.filter((c) => {
+        const t = tierLookup[String(c.sa3_code || '').trim()];
+        return t === 1 || t === 2;
+      }).length;
+      const tier12Pct = sliceClinics.length ? Math.round((tier12Count / sliceClinics.length) * 100) : 0;
+
+      const archetype = this.mostCommon(chainClinics.map((c) => c.clinic_format)) || 'Unknown';
+      const billing = this.mostCommon(chainClinics.map((c) => c['Billing Type'])) || 'Unknown';
+      const ownership = this.mostCommon(chainClinics.map((c) => c.ownership)) || 'Unknown';
+      const states = [...new Set(chainClinics.map((c) => c.state_code || c.State).filter(Boolean))];
+
+      const curated = this.PLATFORM.find((p) => p.name.toLowerCase() === name.toLowerCase());
+      let deliver, quality, platform, fit, deliverEstimated = false;
+      if (curated) {
+        ({ deliver, quality, platform, fit } = curated);
+      } else {
+        deliverEstimated = true;
+        deliver = 50; // no ownership-timeline data for this chain — neutral, not fabricated
+        const bulkShare = this.shareOf(chainClinics, 'Billing Type', 'Bulk');
+        const midShare = this.shareOf(chainClinics, 'clinic_format', 'Mid-format');
+        quality = tier12Pct; // real (Tier 1-2 exposure); footprint-avg-composite/billings-CAGR not computed per-chain here
+        platform = Math.min(100, Math.round((sites / maxSites) * 100));
+        fit = Math.round((bulkShare * 0.55 + midShare * 0.45) * 100);
+      }
+
+      const score = this.scoreOf({ deliver, quality, platform, fit });
+      const category = this.classifyChain(score, sites);
+
+      return { name, sites, inSlice, tier12Pct, archetype, billing, ownership, states, category, score, deliverEstimated };
+    }).sort((a, b) => b.sites - a.sites);
+  },
+
+  toggleLayerDropdown(forceOpen) {
+    const menu = document.getElementById('td-layer-menu');
+    if (!menu) return;
+    const open = typeof forceOpen === 'boolean' ? forceOpen : !menu.classList.contains('open');
+    menu.classList.toggle('open', open);
+  },
+
+  selectChainDossierLayer(layer) {
+    this.CHAIN_DOSSIER.layer = layer;
+    this.toggleLayerDropdown(false);
+    this.renderChainDossier();
+  },
+
+  selectChainDossierFilter(filter) {
+    this.CHAIN_DOSSIER.filter = filter;
+    this.renderChainDossier();
+  },
+
+  renderChainDossier() {
+    if (typeof State === 'undefined' || !State.markets) return;
+    if (!State.activeClinicLayers.includes(this.CHAIN_DOSSIER.layer)) {
+      this.CHAIN_DOSSIER.layer = State.markets.current || 'gp';
+    }
+    const layer = this.CHAIN_DOSSIER.layer;
+    const rows = this.buildChainDossier(layer);
+    this.CHAIN_DOSSIER.rows = rows;
+
+    const labels = { gp: 'GP Clinics', physio: 'Physio Clinics', dental: 'Dental Clinics' };
+    const labelEl = document.getElementById('td-layer-label');
+    if (labelEl) labelEl.textContent = labels[layer] || layer;
+    const menu = document.getElementById('td-layer-menu');
+    if (menu) {
+      menu.innerHTML = (State.activeClinicLayers || ['gp']).map((l) =>
+        `<button type="button" class="market-dropdown-item${l === layer ? ' active' : ''}" onclick="event.stopPropagation(); TP.selectChainDossierLayer('${l}');">${labels[l] || l}</button>`
+      ).join('');
+    }
+
+    const totalSites = rows.reduce((s, r) => s + r.sites, 0);
+    const totalInSlice = rows.reduce((s, r) => s + r.inSlice, 0);
+    const summaryEl = document.getElementById('td-summary');
+    if (summaryEl) {
+      summaryEl.textContent = `${rows.length} chains · ${totalSites} sites` +
+        (totalInSlice !== totalSites ? ` inside your ${totalInSlice === totalSites ? '' : ''}slice (${totalInSlice})` : ' — nothing filtered yet');
+    }
+
+    const counts = { all: rows.length, platform: 0, bolton: 0, watch: 0, outofscope: 0 };
+    rows.forEach((r) => { counts[r.category] = (counts[r.category] || 0) + 1; });
+    const chipsEl = document.getElementById('td-filter-chips');
+    if (chipsEl) {
+      const defs = [['all', 'All'], ['platform', 'Platform'], ['bolton', 'Bolt-on'], ['watch', 'Watch'], ['outofscope', 'Out of scope']];
+      chipsEl.innerHTML = defs.map(([key, label]) =>
+        `<button type="button" class="td-filter-chip${this.CHAIN_DOSSIER.filter === key ? ' active' : ''}" onclick="TP.selectChainDossierFilter('${key}')">${label} ${counts[key]}</button>`
+      ).join('');
+    }
+
+    const filtered = this.CHAIN_DOSSIER.filter === 'all' ? rows : rows.filter((r) => r.category === this.CHAIN_DOSSIER.filter);
+    const tbody = document.getElementById('td-tbody');
+    if (tbody) {
+      tbody.innerHTML = filtered.length ? filtered.map((r) => `
+        <tr>
+            <td class="td-chain-name">${r.name}</td>
+            <td><span class="td-badge td-badge-${r.category}">${this.CATEGORY_LABELS[r.category]}</span></td>
+            <td>${r.sites}</td>
+            <td>${r.inSlice}</td>
+            <td>
+                <div class="td-footprint-cell">
+                    <div class="td-footprint-bar"><div class="td-footprint-bar-fill" style="width:${r.tier12Pct}%"></div></div>
+                    <span>${r.tier12Pct}%</span>
+                </div>
+            </td>
+            <td>${r.archetype}</td>
+            <td>${r.billing}</td>
+            <td>${r.ownership}</td>
+            <td class="td-states">${r.states.join(' ')}</td>
+        </tr>
+      `).join('') : (rows.length === 0
+          ? `<tr><td colspan="9" class="td-empty">No chain/ownership data available for this clinic layer yet.</td></tr>`
+          : `<tr><td colspan="9" class="td-empty">No chains classified into "${this.CATEGORY_LABELS[this.CHAIN_DOSSIER.filter] || 'this'}" for this layer.</td></tr>`);
+    }
+
+    const anyEstimated = rows.some((r) => r.deliverEstimated);
+    const noteEl = document.getElementById('td-deliver-note');
+    if (noteEl) noteEl.textContent = anyEstimated
+      ? ' Chains without known ownership data use an estimated (neutral) deliverability score for classification — not sample/curated figures.'
+      : '';
   }
 };
 

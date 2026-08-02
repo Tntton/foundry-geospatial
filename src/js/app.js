@@ -63,6 +63,16 @@ const State = {
     clinicsData: [],                // flat, assembled view — see rebuildActiveClinicsData()
     clinicsByVertical: { gp: [], physio: [], dental: [] },  // per-vertical cache, Datasets-as-layers (plan Phase A)
     activeClinicLayers: ['gp'],     // which verticals' clinic pins are currently shown; scoring market's own layer is always included
+    // Data Catalogue (plan Phase G) — which optional datasets the user has
+    // loaded. Step 3 shows nothing but "required by the model" info by
+    // default; loading one of these reveals its filter controls there and
+    // (where colorable) a dynamic Colour-by chip.
+    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false },
+    // "Limit regions" (plan Phase G) — SEIFA decile selection is browsable
+    // without narrowing anything until this is switched on (workforce risk/
+    // DPA already narrows immediately via its own pre-existing slider/
+    // checkboxes, so it doesn't need this same gate).
+    catalogueFilterActive: { seifa: false },
     sa3RawLookup: {},
     sa3ClinicCounts: {},
     currentState: '',
@@ -885,6 +895,17 @@ function renderClinicLayerCheckboxes() {
         el.checked = isPrimary || State.activeClinicLayers.includes(layer);
         el.disabled = isPrimary;
     });
+    // Clinic counts (plan Phase G) — only shown once that vertical's data
+    // has actually been fetched at least once (lazy per-layer fetch, plan
+    // Phase E); there's no lightweight count-only query to prefetch all
+    // three up front, so an un-toggled layer's count stays blank until its
+    // first load rather than guessing a number.
+    ['gp', 'physio', 'dental'].forEach((layer) => {
+        const el = document.getElementById('clinic-layer-count-' + layer);
+        if (!el) return;
+        const cached = State.clinicsByVertical[layer];
+        el.textContent = cached && cached.length ? cached.length.toLocaleString('en-AU') : '';
+    });
 }
 
 async function toggleClinicLayer(layer, checked) {
@@ -918,6 +939,13 @@ async function toggleClinicLayer(layer, checked) {
     }
     renderFunnelSummaries();
     renderClinicLayerLegend(); // plan Phase F
+    renderClinicLayerCheckboxes(); // plan Phase G — refresh the count once fetched
+    // Data Catalogue's own Supply rows mirror these same layers — keep its
+    // nav counts/checked-state live if the modal happens to be open.
+    if (!document.getElementById('catalogue-modal-backdrop')?.classList.contains('hidden')) {
+        renderCatalogueNav();
+        renderCatalogueDetail(catalogueActiveCategory);
+    }
 }
 
 async function switchMarket(marketId) {
@@ -1022,6 +1050,7 @@ async function switchMarket(marketId) {
         renderFunnelSummaries();  // plan Phase C
         renderClinicLayerCheckboxes();  // plan Phase E
         renderClinicLayerLegend();  // plan Phase F
+        renderCatalogueLensChips();  // plan Phase G — re-sync dynamic SEIFA chip across market switch
 
         // Re-run the physio-disabled greying logic (defined inline in
         // map.html, reads market from the URL param setQueryParam() above
@@ -1052,12 +1081,15 @@ function updateGPSpecificFilters() {
     document.querySelectorAll('[data-lens="workforce"]').forEach(el => {
         el.style.display = isGP ? '' : 'none';
     });
-    // Also hide the parent lens-nra-wrap div (contains trigger + menu)
+    // GP Billings is now a Data Catalogue item (plan Phase G) — only shown
+    // once loaded AND while GP is the scoring market (it's meaningless
+    // outside of it either way).
+    const gpBillingsVisible = isGP && State.catalogueLoaded.gpBillings;
     const nraWrap = document.querySelector('.lens-nra-wrap');
-    if (nraWrap) nraWrap.style.display = isGP ? '' : 'none';
+    if (nraWrap) nraWrap.style.display = gpBillingsVisible ? '' : 'none';
     // Mobile equivalents
-    document.querySelector('#mob-lens-nra-btn')?.style && (document.querySelector('#mob-lens-nra-btn').style.display = isGP ? '' : 'none');
-    document.querySelector('#mob-nra-picker')?.style && (document.querySelector('#mob-nra-picker').style.display = isGP ? '' : 'none');
+    document.querySelector('#mob-lens-nra-btn')?.style && (document.querySelector('#mob-lens-nra-btn').style.display = gpBillingsVisible ? '' : 'none');
+    document.querySelector('#mob-nra-picker')?.style && (document.querySelector('#mob-nra-picker').style.display = gpBillingsVisible ? '' : 'none');
 
     // Reset NRA or workforce lens if switching away from GP
     if (!isGP && (State.currentMapView.startsWith('nra-') || State.currentMapView === 'workforce')) {
@@ -2071,6 +2103,7 @@ async function ensureSEIFALayer() {
 // ============================================================
 function setMapView(view) {
     State.currentMapView = view;
+    renderCatalogueLensChips(); // plan Phase G — keeps the dynamic SEIFA chip's active class in sync
 
     // Model-inputs disclosure (plan Phase F) only makes sense for Composite
     const modelInputsLink = document.getElementById('model-inputs-link');
@@ -2459,6 +2492,421 @@ function renderClinicLayerLegend() {
             : '<span class="clinic-layer-swatch clinic-layer-swatch-secondary"></span>';
         return `<div class="tier-row">${swatch}<span>${labels[layer] || layer}${isPrimary ? ' · scoring' : ''}</span></div>`;
     }).join('');
+}
+
+// ============================================================
+// Data Catalogue (plan Phase G) — Step 3 ships empty by default; datasets
+// are grouped by the composite dimension they feed (matching the weight
+// labels already in Step 4). "Required" rows are informational only (baked
+// into every score already); "optional" rows are genuinely loadable using
+// only data this app actually has. The mockup's illustrative datasets
+// (population projections, disease prevalence, etc.) are NOT reproduced —
+// see the plan's own "do not fabricate new datasets" note.
+// ============================================================
+// Each category is grouped into logical sections (not a required/optional
+// split) — a locked item just carries `locked:true` and renders an inline
+// badge, same row style as an optional one. Matches the reference design's
+// own grouping (e.g. "Population & Projections", "Epidemiology & Burden").
+//
+// This reproduces the FULL reference catalogue, including datasets this
+// app doesn't actually have yet — those carry `available: false` and
+// render as a greyed-out, disabled row with a "Not available" badge
+// instead of either faking them as loadable or omitting them silently.
+// Only items with a real `key` (seifa / workforce / gpBillings) or
+// `locked: true` on something this app genuinely computes are real.
+const CATALOGUE_CATEGORIES = [
+    {
+        key: 'demand', name: 'Demand', weight: 30,
+        desc: 'How much care this population will need, and how that’s changing.',
+        sections: [
+            { name: 'Population & Projections', items: [
+                { label: 'Estimated resident population', hint: 'ABS ERP · Jun 2024 — feeds the composite', locked: true, type: 'REGION' },
+                { label: 'Population projections to 2031', hint: 'ABS series B · Nov 2023', available: false, type: 'REGION' },
+                { label: 'Share of population aged 65+', hint: 'ABS ERP · Jun 2024 — shown in every region’s profile, not a composite input', locked: true, lockedLabel: 'In region profile', type: 'REGION' },
+                { label: 'Population growth, 5-year CAGR', hint: 'Derived · ABS ERP — the growth half of Demand, feeds the composite', locked: true, type: 'REGION' },
+            ]},
+            { name: 'Epidemiology & Burden', items: [
+                { label: 'Type 2 diabetes prevalence', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
+                { label: 'COPD prevalence', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
+                { label: 'Mental health conditions', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
+                { label: 'ED presentations per 1,000', hint: 'AIHW · Jan 2025', available: false, type: 'REGION' },
+            ]},
+            { name: 'Aged-care Demand', items: [
+                { label: 'Residential aged-care places', hint: 'GEN Aged Care · Apr 2025', available: false, type: 'REGION' },
+                { label: 'Home care packages', hint: 'GEN Aged Care · Apr 2025', available: false, type: 'REGION' },
+            ]},
+        ],
+    },
+    {
+        key: 'supply', name: 'Supply', weight: 35,
+        desc: 'Who is already serving this population — sites on the ground, and the practitioners inside them.',
+        sections: [
+            { name: 'Sites & Business Counts', items: [
+                { label: 'General practice clinics', hint: 'NHSD · Mar 2025 — the scoring market’s own layer is always on', layerToggle: 'gp', type: 'PINS' },
+                { label: 'Physiotherapy clinics', hint: 'NHSD · Mar 2025 — optional overlay, same toggle as Step 1', layerToggle: 'physio', type: 'PINS' },
+                { label: 'Dental clinics', hint: 'NHSD · Mar 2025 — optional overlay, same toggle as Step 1', layerToggle: 'dental', type: 'PINS' },
+                { label: 'Community pharmacies', hint: 'PBS approved suppliers · Feb 2025', available: false, type: 'PINS' },
+                { label: 'Public hospitals & emergency departments', hint: 'AIHW · Jan 2025', available: false, type: 'PINS' },
+                { label: 'Telehealth-only providers', hint: 'MyHR · Mar 2025', available: false, type: 'PINS' },
+            ]},
+            { name: 'Density & Saturation', items: [
+                { label: 'Clinics per 10,000 residents', hint: 'Derived · NHSD × ABS ERP — the Supply input, feeds the composite', locked: true, type: 'REGION' },
+            ]},
+            { name: 'Practitioner Workforce', items: [
+                { key: 'workforce', label: 'Workforce risk & DPA flags', hint: 'DoctorConnect DPA status + composite supply/age/DPA risk score', gpOnly: true, type: 'REGION' },
+                { label: 'GP FTE per 100,000', hint: 'NHWDS · Jun 2024', available: false, type: 'REGION' },
+                { label: 'Allied health FTE per 100,000', hint: 'NHWDS · Jun 2024', available: false, type: 'REGION' },
+                { label: 'Registrar training posts', hint: 'RACGP / ACRRM · Feb 2025', available: false, type: 'REGION' },
+                { label: 'Practitioner churn, 3-year', hint: 'Derived · NHWDS', available: false, type: 'REGION' },
+            ]},
+        ],
+    },
+    {
+        key: 'competition', name: 'Competition', weight: 20,
+        desc: 'Who already holds the ground and how consolidated it already is.',
+        sections: [
+            { name: 'Ownership & Consolidation', items: [
+                { label: 'Ownership mix — corporate vs independent', hint: 'Foundry classification · Mar 2025 — feeds the composite', locked: true, type: 'REGION' },
+                { label: 'Chain penetration by SA3', hint: 'Foundry classification · Mar 2025', available: false, type: 'REGION' },
+                { label: 'Recorded transactions, 5-year', hint: 'Foundry deal log · Mar 2025', available: false, type: 'REGION' },
+            ]},
+            { name: 'Saturation', items: [
+                { label: 'Mean catchment overlap', hint: 'Derived · drive-time isochrones', available: false, type: 'REGION' },
+            ]},
+            { name: 'Adjacent Providers', items: [
+                { label: 'Aged-care provider locations', hint: 'GEN Aged Care · Apr 2025', available: false, type: 'PINS' },
+            ]},
+        ],
+    },
+    {
+        key: 'economics', name: 'Economics', weight: 15,
+        desc: 'What a practice can bill here, and who can pay for it.',
+        sections: [
+            { name: 'Household Means', items: [
+                { label: 'Median household income', hint: '2021 Census · ABS — feeds the composite', locked: true, type: 'REGION' },
+                { key: 'seifa', label: 'SEIFA IRSAD decile', hint: '2021 Census · ABS — socioeconomic disadvantage/advantage, decile 1 (most disadvantaged) to 10', type: 'REGION' },
+                { label: 'SEIFA IRSD decile', hint: '2021 Census · ABS', available: false, type: 'REGION' },
+            ]},
+            { name: 'Payer Mix & Billing', items: [
+                { key: 'gpBillings', label: 'Bulk-billing rate, non-referred attendances', hint: 'Services Australia · Dec 2024 — also includes avg fees/service, total fees, 3Y CAGR', gpOnly: true, type: 'REGION' },
+                { label: 'MBS services per capita', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
+                { label: 'Private health insurance coverage', hint: 'APRA · Jun 2024', available: false, type: 'REGION' },
+            ]},
+            { name: 'Program Funding', items: [
+                { label: 'Commonwealth Home Support Programme (CHSP)', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
+                { label: 'National Disability Insurance Scheme (NDIS)', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
+            ]},
+        ],
+    },
+];
+
+// "Start here" quick bundles — each pre-stages a specific, real combination
+// of the optional items above (not the mockup's illustrative bundles).
+const CATALOGUE_BUNDLES = [
+    { key: 'base', name: 'Base case', desc: 'Just what the model requires — nothing extra loaded.', loads: [] },
+    { key: 'workforce_access', name: 'Workforce & access', desc: 'Add workforce risk and DPA flags to narrow by supply-side pressure.', loads: ['workforce'] },
+    { key: 'full_economics', name: 'Full economics', desc: 'Add SEIFA and GP Billings for a complete economics read.', loads: ['seifa', 'gpBillings'] },
+];
+
+// All optional item keys across every category, regardless of gpOnly/market
+// visibility — used to reset a bundle cleanly (anything not in the bundle's
+// `loads` gets explicitly unloaded, not just left alone).
+function allCatalogueOptionalKeys() {
+    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) => s.items.filter((i) => i.key).map((i) => i.key)));
+}
+
+// Staged selections while the modal is open — committed to
+// State.catalogueLoaded only on "Load", so switching categories mid-review
+// doesn't lose an unsaved checkbox change in a category you've clicked away
+// from.
+let catalogueActiveCategory = 'supply';
+let catalogueStaged = {};
+
+function visibleCatalogueSections(cat) {
+    const isGP = State.markets.current === 'gp';
+    return cat.sections
+        .map((s) => ({ ...s, items: s.items.filter((i) => !i.gpOnly || isGP) }))
+        .filter((s) => s.items.length);
+}
+
+function catalogueStagedChangeCount() {
+    const keys = allCatalogueOptionalKeys();
+    return keys.filter((k) => !!catalogueStaged[k] !== !!State.catalogueLoaded[k]).length;
+}
+
+function renderCatalogueNav() {
+    const nav = document.getElementById('catalogue-modal-nav');
+    if (!nav) return;
+    const bundleHtml = '<div class="catalogue-nav-hdr">Start here</div>' + CATALOGUE_BUNDLES.map((b) => `
+        <button type="button" class="catalogue-bundle-card" onclick="applyCatalogueBundle('${b.key}')">
+            <div class="catalogue-bundle-name">${b.name}<span class="catalogue-bundle-count">${b.loads.length}</span></div>
+            <div class="catalogue-bundle-desc">${b.desc}</div>
+        </button>
+    `).join('');
+    const categoryHtml = '<div class="catalogue-nav-hdr">All interest areas</div>' + CATALOGUE_CATEGORIES.map((cat) => {
+        const sections = visibleCatalogueSections(cat);
+        const allItems = sections.flatMap((s) => s.items);
+        const lockedCount = allItems.filter((i) => i.locked || (i.layerToggle && i.layerToggle === State.markets.current)).length;
+        const loadedCount = allItems.filter((i) => {
+            if (i.layerToggle) return i.layerToggle === State.markets.current || State.activeClinicLayers.includes(i.layerToggle);
+            return i.locked || catalogueStaged[i.key];
+        }).length;
+        return `
+            <button type="button" class="catalogue-nav-item${cat.key === catalogueActiveCategory ? ' active' : ''}" onclick="selectCatalogueCategory('${cat.key}')">
+                <div class="catalogue-nav-item-name">${cat.name}</div>
+                <div class="catalogue-nav-item-sub">
+                    <span class="catalogue-nav-item-counts">${loadedCount} of ${allItems.length} loaded · ${lockedCount} locked</span>
+                    <span class="catalogue-nav-item-weight">${cat.weight}%</span>
+                </div>
+            </button>
+        `;
+    }).join('');
+    nav.innerHTML = bundleHtml + categoryHtml;
+}
+
+function renderCatalogueDetail(key) {
+    const detail = document.getElementById('catalogue-modal-detail');
+    if (!detail) return;
+    const cat = CATALOGUE_CATEGORIES.find((c) => c.key === key);
+    if (!cat) return;
+    const sections = visibleCatalogueSections(cat);
+    detail.innerHTML = `
+        <div class="catalogue-detail-hdr">
+            <span class="catalogue-detail-name">${cat.name}</span>
+            <span class="catalogue-detail-weight">${cat.weight}% of the composite</span>
+        </div>
+        <div class="catalogue-detail-desc">${cat.desc}</div>
+        ${sections.map((s) => `
+            <div class="catalogue-detail-subhdr">${s.name}</div>
+            ${s.items.map((i) => {
+                const typeTag = i.type ? `<span class="catalogue-row-type">${i.type}</span>` : '';
+                if (i.layerToggle) {
+                    const layer = i.layerToggle;
+                    const isPrimary = layer === State.markets.current;
+                    const checked = isPrimary || State.activeClinicLayers.includes(layer);
+                    const badge = isPrimary ? '<span class="catalogue-row-badge">Scoring market</span>' : '';
+                    return `
+                        <label class="catalogue-row${isPrimary ? ' locked' : ''}">
+                            <input type="checkbox" ${checked ? 'checked' : ''} ${isPrimary ? 'disabled' : ''} onchange="toggleClinicLayer('${layer}', this.checked)">
+                            <div>
+                                <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
+                                <div class="catalogue-row-hint">${i.hint}</div>
+                            </div>
+                        </label>
+                    `;
+                }
+                if (i.locked) {
+                    return `
+                        <div class="catalogue-row locked">
+                            <input type="checkbox" checked disabled>
+                            <div>
+                                <div class="catalogue-row-label">${i.label}${typeTag}<span class="catalogue-row-badge">${i.lockedLabel || 'Required by the model'}</span></div>
+                                <div class="catalogue-row-hint">${i.hint}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+                if (i.available === false) {
+                    return `
+                        <div class="catalogue-row unavailable">
+                            <input type="checkbox" disabled>
+                            <div>
+                                <div class="catalogue-row-label">${i.label}${typeTag}<span class="catalogue-row-badge catalogue-row-badge-unavailable">Not available</span></div>
+                                <div class="catalogue-row-hint">${i.hint}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+                return `
+                    <label class="catalogue-row">
+                        <input type="checkbox" class="catalogue-item-checkbox" data-key="${i.key}" ${catalogueStaged[i.key] ? 'checked' : ''} onchange="stageCatalogueItem('${i.key}', this.checked)">
+                        <div>
+                            <div class="catalogue-row-label">${i.label}${typeTag}</div>
+                            <div class="catalogue-row-hint">${i.hint}</div>
+                        </div>
+                    </label>
+                `;
+            }).join('')}
+        `).join('')}
+    `;
+}
+
+function selectCatalogueCategory(key) {
+    catalogueActiveCategory = key;
+    renderCatalogueNav();
+    renderCatalogueDetail(key);
+}
+
+function stageCatalogueItem(key, checked) {
+    catalogueStaged[key] = checked;
+    renderCatalogueNav(); // refresh the "X of Y loaded" counts + Load button state
+    renderCatalogueFooter();
+}
+
+function applyCatalogueBundle(bundleKey) {
+    const bundle = CATALOGUE_BUNDLES.find((b) => b.key === bundleKey);
+    if (!bundle) return;
+    allCatalogueOptionalKeys().forEach((k) => { catalogueStaged[k] = bundle.loads.includes(k); });
+    renderCatalogueNav();
+    renderCatalogueDetail(catalogueActiveCategory);
+    renderCatalogueFooter();
+}
+
+function renderCatalogueFooter() {
+    const count = catalogueStagedChangeCount();
+    const statusEl = document.getElementById('catalogue-staged-status');
+    if (statusEl) statusEl.textContent = count === 0 ? 'No changes staged' : `${count} change${count === 1 ? '' : 's'} staged`;
+    const loadBtn = document.getElementById('catalogue-load-btn');
+    if (loadBtn) loadBtn.disabled = count === 0;
+}
+
+function openDataCatalogue() {
+    catalogueStaged = { ...State.catalogueLoaded };
+    renderCatalogueNav();
+    renderCatalogueDetail(catalogueActiveCategory);
+    renderCatalogueFooter();
+    document.getElementById('catalogue-modal-backdrop')?.classList.remove('hidden');
+}
+
+function closeDataCatalogue() {
+    document.getElementById('catalogue-modal-backdrop')?.classList.add('hidden');
+}
+
+function loadDataCatalogueSelections() {
+    if (catalogueStagedChangeCount() === 0) return;
+    State.catalogueLoaded = { ...catalogueStaged };
+    applyCatalogueLoadedState();
+    closeDataCatalogue();
+}
+
+// Applies State.catalogueLoaded to the actual UI: Step 3 filter sections,
+// the dynamic Colour-by chip(s), and the GP Billings dropdown.
+function applyCatalogueLoadedState() {
+    const groundEmpty = document.getElementById('catalogue-ground-empty');
+    const groundBtn = document.getElementById('ground-add-from-catalogue');
+    const seifaSection = document.getElementById('ses-remoteness-section');
+    const workforceSection = document.getElementById('workforce-section');
+    const extraFilters = document.getElementById('ground-extra-filters');
+    const anyLoaded = State.catalogueLoaded.seifa || State.catalogueLoaded.workforce || State.catalogueLoaded.gpBillings;
+
+    if (seifaSection) seifaSection.classList.toggle('hidden', !State.catalogueLoaded.seifa);
+    if (workforceSection) workforceSection.classList.toggle('hidden', !State.catalogueLoaded.workforce);
+    if (extraFilters) extraFilters.classList.toggle('hidden', !anyLoaded);
+    if (groundEmpty) groundEmpty.classList.toggle('hidden', anyLoaded);
+    if (groundBtn) groundBtn.textContent = anyLoaded ? 'Add more from catalogue' : 'Add from catalogue';
+    if (!State.catalogueLoaded.seifa) State.catalogueFilterActive.seifa = false; // reset on unload
+
+    renderCatalogueLensChips();
+    renderCatalogueDatasetControls(); // plan Phase G
+    updateGPSpecificFilters(); // re-checks catalogueLoaded.gpBillings for the NRA dropdown
+    renderFunnelSummaries();
+    updateRailStats(); // a dataset load/unload can change the running region count
+}
+
+// Per-loaded-dataset control bar (plan Phase G) — "Colour map by this" /
+// "Limit regions" (SEIFA only — workforce already narrows immediately via
+// its own pre-existing slider/checkboxes) / "✕" to unload.
+function renderCatalogueDatasetControls() {
+    const seifaEl = document.getElementById('seifa-dataset-controls');
+    if (seifaEl) {
+        seifaEl.innerHTML = State.catalogueLoaded.seifa ? `
+            <span class="catalogue-dataset-name">SEIFA IRSAD decile</span>
+            <div class="catalogue-dataset-btn-row">
+                <button type="button" class="catalogue-dataset-btn" onclick="colourMapByDataset('seifa')">Colour map by this</button>
+                <button type="button" class="catalogue-dataset-btn${State.catalogueFilterActive.seifa ? ' active' : ''}" onclick="toggleSeifaRegionLimit()">Limit regions</button>
+                <button type="button" class="catalogue-dataset-remove" onclick="removeCatalogueDataset('seifa')" title="Remove SEIFA IRSAD decile">✕</button>
+            </div>
+        ` : '';
+    }
+    const workforceEl = document.getElementById('workforce-dataset-controls');
+    if (workforceEl) {
+        workforceEl.innerHTML = State.catalogueLoaded.workforce ? `
+            <span class="catalogue-dataset-name">Workforce risk &amp; DPA flags</span>
+            <div class="catalogue-dataset-btn-row">
+                <button type="button" class="catalogue-dataset-btn" onclick="colourMapByDataset('workforce')">Colour map by this</button>
+                <button type="button" class="catalogue-dataset-remove" onclick="removeCatalogueDataset('workforce')" title="Remove workforce risk & DPA flags">✕</button>
+            </div>
+        ` : '';
+    }
+}
+
+function colourMapByDataset(key) {
+    const lens = { seifa: 'seifa', workforce: 'workforce' }[key];
+    if (!lens) return;
+    setMapView(lens);
+    saveLensState(lens);
+}
+
+// Removing a dataset unloads it from the catalogue entirely (equivalent to
+// unchecking it there) — clears its filter state too so nothing stays
+// silently applied after its controls disappear.
+function removeCatalogueDataset(key) {
+    State.catalogueLoaded[key] = false;
+    catalogueStaged[key] = false;
+    if (key === 'seifa') {
+        State.seifaDeciles = [];
+        document.querySelectorAll('.seifa-chip').forEach((c) => { c.checked = false; });
+        State.catalogueFilterActive.seifa = false;
+        applySeifaFilter();
+    }
+    if (key === 'workforce') {
+        State.dpaFilter = { bonded: false, gpImg: false };
+        State.workforceRiskMin = 0;
+        const bondedEl = document.getElementById('dpa-bonded'); if (bondedEl) bondedEl.checked = false;
+        const gpImgEl = document.getElementById('dpa-gp-img'); if (gpImgEl) gpImgEl.checked = false;
+        const sliderEl = document.getElementById('workforce-risk-slider'); if (sliderEl) sliderEl.value = 0;
+        const readoutEl = document.getElementById('workforce-risk-readout'); if (readoutEl) readoutEl.textContent = '0';
+        applyWorkforceFilters();
+    }
+    applyCatalogueLoadedState();
+    updateFilterChips();
+}
+
+// SA2 → SA3 aggregation for the SEIFA "Limit regions" toggle — an SA3
+// "passes" if at least one of its SA2s falls in a selected decile. Real
+// data (SA2 features carry SA3Code — see fetchSa2Geojson()), not a
+// fabricated shortcut; lazily loads the SA2 dataset if needed since it's
+// otherwise only fetched on first switching to the SEIFA lens.
+function computeSeifaPassingSA3Codes() {
+    if (!State.sa2Data) return null; // caller re-runs updateRailStats() once ensureSEIFALayer() resolves
+    const passing = new Set();
+    State.sa2Data.features.forEach((f) => {
+        const p = f.properties;
+        if (State.seifaDeciles.includes(p.IRSAD_Decile)) passing.add(String(p.SA3Code).trim());
+    });
+    return passing;
+}
+
+async function toggleSeifaRegionLimit() {
+    State.catalogueFilterActive.seifa = !State.catalogueFilterActive.seifa;
+    if (State.catalogueFilterActive.seifa && !State.sa2Data) {
+        await ensureSEIFALayer(); // populates State.sa2Data as a side effect
+    }
+    renderCatalogueDatasetControls();
+    updateRailStats();
+}
+
+// Dynamic Colour-by chip for SEIFA (desktop + mobile) — only appears once
+// loaded from the catalogue. Delegated active-class sync (wireLensActiveSync
+// in wireUI) handles visual state on click; setMapView() itself calls this
+// too so the chip's active class stays correct even when SEIFA is entered
+// via decile-chip selection rather than a direct click on this chip.
+function renderCatalogueLensChips() {
+    const wireChip = (btn) => {
+        btn.addEventListener('click', () => { setMapView(btn.dataset.lens); saveLensState(btn.dataset.lens); });
+    };
+    const desktop = document.getElementById('catalogue-lens-chips');
+    if (desktop) {
+        desktop.innerHTML = State.catalogueLoaded.seifa
+            ? `<button class="lens-seg${State.currentMapView === 'seifa' ? ' active' : ''}" data-lens="seifa">SEIFA</button>` : '';
+        desktop.querySelectorAll('.lens-seg').forEach(wireChip);
+    }
+    const mobile = document.getElementById('mob-catalogue-lens-chips');
+    if (mobile) {
+        mobile.innerHTML = State.catalogueLoaded.seifa
+            ? `<button class="mob-lens-chip lens-seg${State.currentMapView === 'seifa' ? ' active' : ''}" data-lens="seifa">SEIFA</button>` : '';
+        mobile.querySelectorAll('.lens-seg').forEach(wireChip);
+    }
 }
 
 function applySeifaFilter() {
@@ -5198,6 +5646,14 @@ function updateRailStats() {
     if (State.workforceRiskMin > 0) {
         features = features.filter(f => (f.properties.Workforce_Risk_Score || 0) >= State.workforceRiskMin);
     }
+    // SEIFA "Limit regions" (plan Phase G) — off by default even with
+    // deciles selected (browsable, not narrowing, until switched on) since
+    // SEIFA is SA2-level and this app's SA3 running count needs a real
+    // aggregation step first (see computeSeifaPassingSA3Codes()).
+    if (State.catalogueFilterActive.seifa && State.seifaDeciles && State.seifaDeciles.length) {
+        const passing = computeSeifaPassingSA3Codes();
+        if (passing) features = features.filter(f => passing.has(String(f.properties.SA3Code).trim()));
+    }
 
     let tier1 = 0, tier2 = 0, sum = 0, acquirable = 0, scoredCount = 0; // scoredCount: plan Phase F
     features.forEach(f => {
@@ -5846,6 +6302,8 @@ function wireMarketSelector() {
     // Close the scoring-market dropdown on any outside click, mirroring the
     // existing .lens-nra-menu pattern.
     document.addEventListener('click', () => toggleMarketDropdown(false));
+    // Same for the Targets chain-dossier layer dropdown (plan Phase G).
+    document.addEventListener('click', () => { if (typeof TP !== 'undefined') TP.toggleLayerDropdown(false); });
     wireMapSubTabs();
 }
 
@@ -5877,25 +6335,11 @@ function wireMapSubTabs() {
                 renderRankings(); // reuse existing full rankings renderer
             } else if (target === 'targets') {
                 if (countEl) countEl.textContent = '';
-                const targetsPanel = document.getElementById('subpanel-targets');
-                if ((State.markets.current || 'gp') !== 'gp') {
-                    // Non-GP markets have no corporate classification — show placeholder
-                    if (targetsPanel) {
-                        targetsPanel.innerHTML = `
-                            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px;color:var(--muted);text-align:center;padding:40px;">
-                                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="opacity:0.3">
-                                    <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2"/>
-                                    <circle cx="24" cy="24" r="10" stroke="currentColor" stroke-width="2"/>
-                                    <circle cx="24" cy="24" r="3" fill="currentColor"/>
-                                </svg>
-                                <div style="font-size:15px;font-weight:600;color:var(--ink-2);">Coming soon</div>
-                                <div style="font-size:13px;max-width:320px;line-height:1.6;">Corporate classification for this market is in progress. Targets will be available once ownership data is verified.</div>
-                            </div>`;
-                    }
-                } else if (typeof TargetsTab !== 'undefined') {
-                    TargetsTab.enrichFromAppState();
-                    TargetsTab.render();
-                }
+                // Chain dossier (plan Phase G) is computed from real per-layer
+                // clinic data, not the old hand-curated GP-only PLATFORM list,
+                // so it works for any market/clinic layer — no more "coming
+                // soon" placeholder for non-GP markets.
+                if (typeof TP !== 'undefined') TP.renderChainDossier();
             }
         });
     });
@@ -5957,11 +6401,14 @@ function wireUI() {
         });
     });
 
-    // F-06: MMM multi-select via checkbox chips
+    // F-06: MMM multi-select via checkbox chips. Values can be a single
+    // class ("3") or a combined bucket ("6,7" — plan Phase G's "6-7 Remote"
+    // grouping) — split+flatten so a combined chip contributes every class
+    // it represents to State.mmmFilter.
     document.querySelectorAll('.mmm-chip').forEach(chk => {
         chk.addEventListener('change', () => {
             const selected = Array.from(document.querySelectorAll('.mmm-chip:checked'))
-                .map(el => parseInt(el.value));
+                .flatMap(el => el.value.split(',').map(Number));
             State.mmmFilter = selected;
             applyWorkforceFilters();
             updateRailStats();
@@ -6481,9 +6928,13 @@ function renderFunnelSummaries() {
 
     const s3 = document.getElementById('funnel-summary-ground');
     if (s3) {
-        const seifa = (State.seifaDeciles || []).length ? `SEIFA decile ${State.seifaDeciles.join(',')}` : 'all SEIFA deciles';
-        const wf = State.workforceRiskMin > 0 ? ` · workforce risk ≥${State.workforceRiskMin}` : '';
-        s3.textContent = `${seifa}${wf}`;
+        // plan Phase G — Step 3 is now the Data Catalogue entry point (Demand/
+        // Supply/Competition/Economics), so its summary reflects which of
+        // those categories have something loaded, not SEIFA specifically.
+        const loadedCategoryNames = (typeof CATALOGUE_CATEGORIES !== 'undefined' ? CATALOGUE_CATEGORIES : [])
+            .filter((cat) => cat.sections.some((sec) => sec.items.some((i) => i.key && State.catalogueLoaded[i.key])))
+            .map((cat) => cat.name);
+        s3.textContent = loadedCategoryNames.length ? loadedCategoryNames.join(', ') + ' loaded' : 'Nothing loaded';
     }
 
     const s4 = document.getElementById('funnel-summary-thesis');
