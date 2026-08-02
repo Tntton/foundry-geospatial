@@ -82,6 +82,13 @@ const State = {
     seifaRange: [1, 10],            // legacy; use seifaDeciles
     seifaDeciles: [],               // SEIFA decile chips; [] = all shown
     mmmFilter: [],                  // array of MMM class ints; [] = no filter
+    // Copilot-only filters (plan Phase H) — no manual rail control for
+    // either, deliberately: the brief's non-goals rule out adding new rail
+    // UI, so these are only ever set by applyCopilotIntent() and cleared via
+    // their own removable filter chip (see updateFilterChips()).
+    tierFilter: [],                 // array of allowed tier ints (1-5); [] = no filter
+    regionFilter: null,             // { name, sa3Codes } | null — resolved gazetteer region
+    supplyScoreMin: null,           // number | null — "low competitive density" resolved threshold, see resolveLowDensityThreshold()
     rankingsSort: { key: 'composite', dir: 'desc' },
     rankingsFilters: { search: '', state: '', tier: '' },
     weights: { demand: 30, supply: 35, competition: 20, economics: 15 },
@@ -542,6 +549,31 @@ async function fetchMarketConfigFromSupabase(marketId) {
     const { data, error } = await supabase.from('markets').select('config').eq('market_id', marketId).single();
     if (error) throw new Error(`Failed to load config for market: ${marketId} (${error.message})`);
     return data.config;
+}
+
+// Named-region gazetteer (plan Phase H) — resolves a real curated region
+// name (e.g. "South-East Queensland", see scripts/supabase_migration/
+// schema.sql's region_definitions/region_gazetteer_members tables) to its
+// explicit SA3 code list. The copilot backend already validates regionName
+// against this same table before it ever reaches here (api/copilot.js) —
+// this is the client-side lookup that turns the validated name into an
+// actual filter. Cached by name since the gazetteer is small and static.
+const _regionGazetteerCache = {};
+async function resolveGazetteerRegion(regionName) {
+    if (!regionName) return null;
+    if (_regionGazetteerCache[regionName]) return _regionGazetteerCache[regionName];
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase
+        .from('region_gazetteer_members')
+        .select('sa3_code')
+        .eq('region_name', regionName);
+    if (error || !data || !data.length) {
+        console.warn('[copilot] gazetteer lookup failed for', regionName, error?.message);
+        return null;
+    }
+    const result = { name: regionName, sa3Codes: data.map((r) => r.sa3_code) };
+    _regionGazetteerCache[regionName] = result;
+    return result;
 }
 
 async function fetchClinicIsochroneGeojson(marketId, clinicId) {
@@ -3199,7 +3231,24 @@ function applyWorkforceFilters() {
         ? ['>=', ['coalesce', ['get', 'Workforce_Risk_Score'], 0], State.workforceRiskMin]
         : null;
 
-    const filters = [stateFilter, mmmFilter, dpaFilter, riskFilter].filter(Boolean);
+    // Copilot-only filters (plan Phase H) — same "[] = no filter" convention
+    // as mmmFilter above, no manual rail control for either.
+    const tierFilterExpr = State.tierFilter.length
+        ? ['in', ['get', 'Tier'], ['literal', State.tierFilter]]
+        : null;
+    const regionFilterExpr = State.regionFilter && State.regionFilter.sa3Codes.length
+        ? ['in', ['get', 'SA3Code'], ['literal', State.regionFilter.sa3Codes]]
+        : null;
+    // "Low competitive density" -> HIGH Supply_Score, not low (per the
+    // Gap 2 semantic alias: fewer clinics relative to population = more
+    // attractive = higher Supply score — see schema.sql's comment on
+    // sa3.supply_score). Confirmed against live data: every current tier
+    // 1-2 SA3 sits above the national median Supply_Score, none below it.
+    const densityFilterExpr = State.supplyScoreMin != null
+        ? ['>=', ['coalesce', ['get', 'Supply_Score'], 0], State.supplyScoreMin]
+        : null;
+
+    const filters = [stateFilter, mmmFilter, dpaFilter, riskFilter, tierFilterExpr, regionFilterExpr, densityFilterExpr].filter(Boolean);
     const combined = filters.length === 0 ? null
         : filters.length === 1 ? filters[0]
         : ['all', ...filters];
@@ -5553,7 +5602,11 @@ function updateWeightUI() {
         }
     });
     document.getElementById('weights-reset').classList.toggle('hidden', isDefault);
-    document.getElementById('weight-warning').classList.toggle('visible', !isDefault);
+    // Plan Phase H — the co-pilot banner shares this same floating slot and
+    // takes precedence while active, so this banner stays suppressed rather
+    // than fighting it for the same space.
+    const copilotBannerActive = !document.getElementById('copilot-banner')?.classList.contains('hidden');
+    document.getElementById('weight-warning').classList.toggle('visible', !isDefault && !copilotBannerActive);
     // Custom thesis badge
     const badge = document.getElementById('thesis-badge');
     if (badge) badge.style.display = isDefault ? 'none' : '';
@@ -5637,17 +5690,28 @@ function applyWeights() {
 // ============================================================
 // Rail stats
 // ============================================================
-function updateRailStats() {
-    if (!State.sa3Data) return;
-    const allCount = State.sa3Data.features.length; // plan Phase F: running count stage 1
-    let features = State.sa3Data.features;
+// Single source of truth for "what SA3s are currently in scope" — shared by
+// updateRailStats() below (which derives tier/avg/acquirable stats from it)
+// and the copilot's camera-fit tool call (plan Phase H, applyCopilotIntent()),
+// so the displayed region count and the camera's fitBounds target can never
+// silently disagree with each other.
+function computeFilteredSA3Features() {
+    if (!State.sa3Data) return { all: [], afterGeo: [], final: [] };
+    const all = State.sa3Data.features;
+    let features = all;
     if (State.currentState) {
         features = features.filter(f => f.properties.State === State.currentState);
     }
     if (State.mmmFilter && State.mmmFilter.length) {
         features = features.filter(f => State.mmmFilter.includes(f.properties.MMM_Dominant));
     }
-    const afterGeoCount = features.length; // plan Phase F: running count stage 2
+    // Copilot-only geography narrowing (plan Phase H) — resolved gazetteer
+    // region, e.g. "South-East Queensland" -> its real SA3 code list.
+    if (State.regionFilter && State.regionFilter.sa3Codes.length) {
+        const codes = new Set(State.regionFilter.sa3Codes);
+        features = features.filter(f => codes.has(String(f.properties.SA3Code).trim()));
+    }
+    const afterGeo = features;
     if (State.dpaFilter.bonded && State.dpaFilter.gpImg) {
         features = features.filter(f => f.properties.DPA_Bonded && f.properties.DPA_GP_IMG);
     } else if (State.dpaFilter.bonded) {
@@ -5666,6 +5730,48 @@ function updateRailStats() {
         const passing = computeSeifaPassingSA3Codes();
         if (passing) features = features.filter(f => passing.has(String(f.properties.SA3Code).trim()));
     }
+    // Copilot-only tier narrowing (plan Phase H) — e.g. "tier 1 and 2".
+    if (State.tierFilter && State.tierFilter.length) {
+        features = features.filter(f => State.tierFilter.includes(f.properties.Tier));
+    }
+    // Copilot-only "low competitive density" narrowing (plan Phase H) — a
+    // concrete resolved threshold, set by resolveLowDensityThreshold().
+    // "Low density" = HIGH Supply_Score (see applyWorkforceFilters()'s
+    // matching comment for why).
+    if (State.supplyScoreMin != null) {
+        features = features.filter(f => (parseFloat(f.properties.Supply_Score) || 0) >= State.supplyScoreMin);
+    }
+    return { all, afterGeo, final: features };
+}
+
+// "Low competitive density" (plan Phase H) resolves to a LIVE percentile
+// split over whatever's currently geography-filtered (state/MMM/named
+// region) — not a fixed absolute score — so "low" means the same relative
+// thing whether you're looking at 340 regions or 12. Returns the median
+// (50th percentile) Supply_Score value; the caller keeps everything AT OR
+// ABOVE it (State.supplyScoreMin, ">=" in applyWorkforceFilters()/
+// computeFilteredSA3Features()) — HIGH Supply_Score is what "low density"
+// actually means here, not low, matching the design reference's
+// "Competitive density ≤ Q2" framing (bottom half of density = top half of
+// the inverse proxy score). Must be called with geography filters already
+// applied to State but before ground filters are read, so `afterGeo`
+// reflects only the geographic scope, not any ground-filter narrowing.
+function resolveLowDensityThreshold(percentile = 50) {
+    const { afterGeo } = computeFilteredSA3Features();
+    const scores = afterGeo
+        .map((f) => parseFloat(f.properties.Supply_Score))
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b);
+    if (!scores.length) return null;
+    const idx = Math.min(scores.length - 1, Math.floor((percentile / 100) * scores.length));
+    return scores[idx];
+}
+
+function updateRailStats() {
+    if (!State.sa3Data) return;
+    const { all, afterGeo, final: features } = computeFilteredSA3Features();
+    const allCount = all.length; // plan Phase F: running count stage 1
+    const afterGeoCount = afterGeo.length; // plan Phase F: running count stage 2
 
     let tier1 = 0, tier2 = 0, sum = 0, acquirable = 0, scoredCount = 0; // scoredCount: plan Phase F
     features.forEach(f => {
@@ -6545,7 +6651,21 @@ function wireUI() {
 
     if (globalSearchInput) {
         globalSearchInput.addEventListener('input', (e) => runGlobalSearch(e.target.value.trim()));
-        globalSearchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none'; } });
+        globalSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none'; }
+            // Natural-language co-pilot (plan Phase H) — Enter did nothing on
+            // this input before; extends the existing ⌘K surface rather than
+            // adding a second "ask the AI" panel. Typing-as-you-go behavior
+            // above is completely untouched.
+            if (e.key === 'Enter' && globalSearchInput.value.trim()) {
+                e.preventDefault();
+                globalSearchResults.innerHTML = '';
+                globalSearchClear.style.display = 'none';
+                const q = globalSearchInput.value.trim();
+                globalSearchInput.value = '';
+                runCopilotQuery(q);
+            }
+        });
         document.addEventListener('click', (e) => { if (!e.target.closest('.global-search-wrap')) globalSearchResults.innerHTML = ''; });
     }
     if (globalSearchClear) {
@@ -6933,7 +7053,8 @@ function renderFunnelSummaries() {
 
     const s2 = document.getElementById('funnel-summary-geo');
     if (s2) {
-        const state = State.currentState || 'All Australia';
+        const state = State.regionFilter ? (State.currentState ? `${State.currentState} · ${State.regionFilter.name}` : State.regionFilter.name)
+            : (State.currentState || 'All Australia');
         const mmm = (State.mmmFilter || []).length ? `MMM ${State.mmmFilter.join(',')}` : 'all remoteness';
         s2.textContent = `${state} · ${mmm}`;
     }
@@ -6946,7 +7067,13 @@ function renderFunnelSummaries() {
         const loadedCategoryNames = (typeof CATALOGUE_CATEGORIES !== 'undefined' ? CATALOGUE_CATEGORIES : [])
             .filter((cat) => cat.sections.some((sec) => sec.items.some((i) => i.key && State.catalogueLoaded[i.key])))
             .map((cat) => cat.name);
-        s3.textContent = loadedCategoryNames.length ? loadedCategoryNames.join(', ') + ' loaded' : 'Nothing loaded';
+        // plan Phase H — copilot-only tier/density filters have no catalogue
+        // category of their own; append them alongside loaded categories.
+        const copilotBits = [];
+        if (State.tierFilter && State.tierFilter.length) copilotBits.push(`Tier ${State.tierFilter.slice().sort().join('–')}`);
+        if (State.supplyScoreMin != null) copilotBits.push('Low competitive density');
+        const base = loadedCategoryNames.length ? loadedCategoryNames.join(', ') + ' loaded' : 'Nothing loaded';
+        s3.textContent = copilotBits.length ? `${base} · ${copilotBits.join(' · ')}` : base;
     }
 
     const s4 = document.getElementById('funnel-summary-thesis');
@@ -7019,6 +7146,14 @@ function updateFilterChips() {
     if (State.dpaFilter.gpImg)  chips.push({ label: 'DPA GP/IMG', key: 'dpa-gpimg' });
     if (State.workforceRiskMin > 0) chips.push({ label: `Risk ≥${State.workforceRiskMin}`, key: 'wf-risk' });
 
+    // Copilot-only filters (plan Phase H) — no rail control of their own,
+    // so this chip is the only way to see and clear them.
+    if (State.regionFilter) chips.push({ label: State.regionFilter.name, key: 'region' });
+    if (State.tierFilter && State.tierFilter.length)
+        chips.push({ label: `Tier ${State.tierFilter.slice().sort().join(', ')}`, key: 'tier' });
+    if (State.supplyScoreMin != null)
+        chips.push({ label: `Low competitive density`, key: 'density' });
+
     const strip = document.getElementById('filter-chips-strip');
     const inner = document.getElementById('filter-chips-inner');
     if (!strip || !inner) return;
@@ -7063,10 +7198,429 @@ function removeFilterChip(key) {
         document.getElementById('workforce-risk-slider').value = 0;
         document.getElementById('workforce-risk-readout').textContent = '0';
         State.workforceRiskMin = 0; applyWorkforceFilters();
+    } else if (key === 'region') {
+        State.regionFilter = null; applyWorkforceFilters();
+    } else if (key === 'tier') {
+        State.tierFilter = []; applyWorkforceFilters();
+    } else if (key === 'density') {
+        State.supplyScoreMin = null; applyWorkforceFilters();
     }
     updateRailStats();
     updateFilterChips();
     deactivatePreset();
+}
+
+// ============================================================
+// Natural-language co-pilot (plan Phase H)
+// ============================================================
+// One structured "intent" object (from api/copilot.js's generateObject call)
+// is applied here deterministically, in a FIXED safe order — the model
+// never touches live state directly, it only describes intent. Every step
+// below reuses an existing apply*()/set*() function; nothing here
+// reimplements filtering logic. See plan Phase H for the full rationale
+// (single structured intent vs. an agentic tool loop against the live map).
+
+const COPILOT_MARKET_LABELS = { gp: 'General Practice', physio: 'Physiotherapy', dental: 'Dental' };
+const COPILOT_CATALOGUE_LABELS = { seifa: 'SEIFA IRSAD decile', workforce: 'workforce risk & DPA flags', gpBillings: 'GP billing mix' };
+const COPILOT_MAX_HISTORY = 6;
+let _copilotHistory = []; // session-only (no backend session store exists or is needed) — [{query, summary}], newest last
+
+function copilotSleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function copilotBbox(features) {
+    if (!features || !features.length) return null;
+    try { return turf.bbox(turf.featureCollection(features)); } catch { return null; }
+}
+function copilotBboxArea(b) { return Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]); }
+// "Meaningfully different" — IoU (intersection over union) below 0.6. A
+// simple, concrete threshold: refiltering to a subset that still mostly
+// overlaps the current view (e.g. "now just the independent ones", same
+// regions, fewer clinic pins) holds the camera; a genuinely different
+// region set re-flies. New code — no existing helper computes this.
+function copilotBboxChangedMeaningfully(before, after) {
+    if (!before || !after) return true;
+    const areaBefore = copilotBboxArea(before), areaAfter = copilotBboxArea(after);
+    if (areaBefore === 0 || areaAfter === 0) return true;
+    const ix1 = Math.max(before[0], after[0]), iy1 = Math.max(before[1], after[1]);
+    const ix2 = Math.min(before[2], after[2]), iy2 = Math.min(before[3], after[3]);
+    const inter = (ix2 > ix1 && iy2 > iy1) ? (ix2 - ix1) * (iy2 - iy1) : 0;
+    const iou = inter / (areaBefore + areaAfter - inter);
+    return iou < 0.6;
+}
+
+function buildCopilotStateSummary() {
+    return {
+        scoringMarket: State.markets.current,
+        clinicLayers: State.activeClinicLayers,
+        state: State.currentState || null,
+        regionName: State.regionFilter?.name || null,
+        remoteness: State.mmmFilter,
+        tier: State.tierFilter,
+        seifaDeciles: State.seifaDeciles,
+        workforceRiskMin: State.workforceRiskMin,
+        dpaBonded: State.dpaFilter.bonded,
+        dpaGpImg: State.dpaFilter.gpImg,
+        archetype: State.archetypeFilter,
+        lowDensityActive: State.supplyScoreMin != null,
+        colourBy: State.currentMapView,
+        catalogueLoaded: State.catalogueLoaded,
+        regionsInScope: computeFilteredSA3Features().final.length
+    };
+}
+
+function describeCopilotFilterSummary(intent) {
+    const parts = [];
+    if (intent.geography?.regionName) parts.push(intent.geography.regionName);
+    else if (intent.geography?.state) parts.push(intent.geography.state);
+    if (intent.groundFilters?.archetype?.ownership?.length) parts.push(intent.groundFilters.archetype.ownership.join('/'));
+    if (intent.groundFilters?.tier?.length) parts.push(`Tier ${intent.groundFilters.tier.slice().sort().join('–')}`);
+    if (intent.groundFilters?.lowDensity) parts.push('Low competitive density');
+    return parts.join(' · ');
+}
+
+// Builds the ordered, conditional list of checklist steps for this intent —
+// only steps whose action actually applies for THIS query appear (unlike a
+// fixed mock sequence). Each has a real async `run()`; the checklist UI
+// renders them queued → running → done as they're actually awaited below,
+// not a fake timer.
+function buildCopilotSteps(intent) {
+    const steps = [];
+    const isGP = () => State.markets.current === 'gp';
+
+    if (intent.scoringMarket && intent.scoringMarket !== State.markets.current) {
+        steps.push({
+            label: `Setting scoring market: ${COPILOT_MARKET_LABELS[intent.scoringMarket] || intent.scoringMarket}`,
+            tag: 'step 1', railStep: 'clinics',
+            run: async () => { await switchMarket(intent.scoringMarket); }
+        });
+    }
+    if (intent.clinicLayers) {
+        (intent.clinicLayers.add || []).forEach((layer) => {
+            if (!State.activeClinicLayers.includes(layer)) {
+                steps.push({
+                    label: `Adding ${COPILOT_MARKET_LABELS[layer] || layer} layer`, tag: 'step 1', railStep: 'clinics',
+                    run: async () => { await toggleClinicLayer(layer, true); }
+                });
+            }
+        });
+        (intent.clinicLayers.remove || []).forEach((layer) => {
+            if (State.activeClinicLayers.includes(layer) && layer !== State.markets.current) {
+                steps.push({
+                    label: `Removing ${COPILOT_MARKET_LABELS[layer] || layer} layer`, tag: 'step 1', railStep: 'clinics',
+                    run: async () => { await toggleClinicLayer(layer, false); }
+                });
+            }
+        });
+    }
+    const catalogueNeeded = (intent.catalogueLoads || []).filter((k) => {
+        if (State.catalogueLoaded[k]) return false;
+        if (k === 'gpBillings' && !isGP()) return false; // gpOnly — model should already reflect this in status:partial/skipped
+        return true;
+    });
+    if (catalogueNeeded.length) {
+        steps.push({
+            label: `Loading ${catalogueNeeded.map((k) => COPILOT_CATALOGUE_LABELS[k] || k).join(', ')} from data catalogue`,
+            tag: 'catalogue', railStep: 'ground',
+            run: async () => {
+                catalogueNeeded.forEach((k) => { catalogueStaged[k] = true; });
+                loadDataCatalogueSelections();
+            }
+        });
+    }
+    const g = intent.geography, gf = intent.groundFilters;
+    const filteringLabel = describeCopilotFilterSummary(intent);
+    if (filteringLabel) {
+        steps.push({
+            label: `Filtering: ${filteringLabel}`, tag: 'steps 2–3', railStep: null, // touches both, pulsed separately below
+            run: async () => {
+                if (g?.state && g.state !== State.currentState) {
+                    State.currentState = g.state;
+                    const sel = document.getElementById('state-filter');
+                    if (sel) sel.value = g.state;
+                }
+                if (g?.regionName) {
+                    const resolved = await resolveGazetteerRegion(g.regionName);
+                    if (resolved) State.regionFilter = resolved;
+                }
+                if (g?.remoteness?.length) {
+                    State.mmmFilter = g.remoteness;
+                    document.querySelectorAll('.mmm-chip').forEach((cb) => {
+                        const vals = cb.value.split(',').map(Number);
+                        cb.checked = vals.some((v) => g.remoteness.includes(v));
+                    });
+                }
+                if (gf?.tier?.length) State.tierFilter = gf.tier;
+                if (gf?.seifaDeciles?.length) {
+                    State.seifaDeciles = gf.seifaDeciles;
+                    State.catalogueFilterActive.seifa = true;
+                    document.querySelectorAll('.seifa-chip').forEach((cb) => { cb.checked = gf.seifaDeciles.includes(parseInt(cb.value, 10)); });
+                }
+                if (gf?.workforceRiskMin != null) {
+                    State.workforceRiskMin = gf.workforceRiskMin;
+                    const slider = document.getElementById('workforce-risk-slider');
+                    if (slider) slider.value = gf.workforceRiskMin;
+                    const readout = document.getElementById('workforce-risk-readout');
+                    if (readout) readout.textContent = gf.workforceRiskMin;
+                }
+                if (gf?.dpaBonded != null) {
+                    State.dpaFilter.bonded = gf.dpaBonded;
+                    const el = document.getElementById('dpa-bonded'); if (el) el.checked = gf.dpaBonded;
+                }
+                if (gf?.dpaGpImg != null) {
+                    State.dpaFilter.gpImg = gf.dpaGpImg;
+                    const el = document.getElementById('dpa-gp-img'); if (el) el.checked = gf.dpaGpImg;
+                }
+                if (gf?.archetype) {
+                    ['format', 'billing', 'ownership'].forEach((dim) => {
+                        const vals = gf.archetype[dim];
+                        if (vals && vals.length) {
+                            State.archetypeFilter[dim] = vals;
+                            document.querySelectorAll(`.archetype-chip[data-dim="${dim}"]`).forEach((cb) => { cb.checked = vals.includes(cb.value); });
+                        }
+                    });
+                    applyArchetypeFilter();
+                }
+                if (gf?.lowDensity) State.supplyScoreMin = resolveLowDensityThreshold(50);
+                applyWorkforceFilters();
+                applySeifaFilter();
+            }
+        });
+    }
+    if (intent.colourBy && intent.colourBy !== State.currentMapView) {
+        steps.push({
+            label: `Colouring by ${intent.colourBy}`, tag: 'colour', railStep: 'thesis',
+            run: async () => { setMapView(intent.colourBy); saveLensState(intent.colourBy); }
+        });
+    }
+    return steps;
+}
+
+// The one entry point wired to Enter on #global-search-input (plan Phase H).
+async function runCopilotQuery(query) {
+    const trimmed = (query || '').trim();
+    if (!trimmed) return;
+
+    renderCopilotChecklist([{ label: 'Thinking through your request', tag: 'plan', status: 'running' }]);
+    showCopilotChecklist(true);
+
+    let data;
+    try {
+        const res = await fetch('/api/copilot', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                query: trimmed,
+                currentState: buildCopilotStateSummary(),
+                history: _copilotHistory.slice(-COPILOT_MAX_HISTORY)
+            })
+        });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.intent) {
+            showCopilotChecklist(false);
+            renderCopilotBanner({ status: 'declined', declineReason: data.error || "Couldn't reach the co-pilot just now — try again." });
+            return;
+        }
+    } catch {
+        showCopilotChecklist(false);
+        renderCopilotBanner({ status: 'declined', declineReason: "Couldn't reach the co-pilot just now — try again." });
+        return;
+    }
+
+    await applyCopilotIntent(data.intent, trimmed);
+}
+
+async function applyCopilotIntent(intent, originalQuery) {
+    const beforeFeatures = computeFilteredSA3Features().final;
+    const beforeBbox = copilotBbox(beforeFeatures);
+    const beforeCount = beforeFeatures.length;
+    const steps = buildCopilotSteps(intent);
+    const pulseSteps = new Set(steps.map((s) => s.railStep).filter(Boolean));
+    if (steps.some((s) => s.tag === 'steps 2–3')) { pulseSteps.add('geo'); pulseSteps.add('ground'); }
+
+    const display = steps.map((s) => ({ label: s.label, tag: s.tag, status: 'queued' }));
+    renderCopilotChecklist(display);
+
+    for (let i = 0; i < steps.length; i++) {
+        display[i].status = 'running';
+        renderCopilotChecklist(display);
+        await steps[i].run();
+        display[i].status = 'done';
+        renderCopilotChecklist(display);
+        await copilotSleep(180); // pacing only, for legibility — every line above is real completed work, not a timer standing in for it
+    }
+
+    updateRailStats();
+    updateFilterChips();
+    renderFunnelSummaries();
+
+    // Camera — resolved AFTER every filter has actually applied, fitted to
+    // the real matched geometry (never the gazetteer's static region bbox),
+    // and only re-flown if the view genuinely needs to move.
+    let cameraHeld = false;
+    if (intent.focus?.name) {
+        display.push({ label: `Opening ${intent.focus.name}`, tag: 'map', status: 'running' });
+        renderCopilotChecklist(display);
+        if (intent.focus.type === 'region') {
+            const match = State.sa3Data?.features.find((f) => (f.properties.SA3Name || '').toLowerCase() === intent.focus.name.toLowerCase());
+            if (match) selectSA3(match.properties.SA3Code);
+        } else if (intent.focus.type === 'clinic') {
+            const match = State.clinicsData.find((c) => (c.clinic_name || '').toLowerCase() === intent.focus.name.toLowerCase());
+            if (match) selectClinic(match);
+        }
+        display[display.length - 1].status = 'done';
+        renderCopilotChecklist(display);
+    } else {
+        const afterFeatures = computeFilteredSA3Features().final;
+        const afterBbox = copilotBbox(afterFeatures);
+        if (afterBbox && copilotBboxChangedMeaningfully(beforeBbox, afterBbox)) {
+            display.push({ label: `Fitting camera to ${afterFeatures.length} matched region${afterFeatures.length === 1 ? '' : 's'}`, tag: 'map', status: 'running' });
+            renderCopilotChecklist(display);
+            map.fitBounds(afterBbox, { padding: 60, duration: 800, maxZoom: 10 });
+            display[display.length - 1].status = 'done';
+            renderCopilotChecklist(display);
+        } else {
+            cameraHeld = true;
+        }
+    }
+
+    pulseRailSteps([...pulseSteps]);
+    await copilotSleep(300);
+    showCopilotChecklist(false);
+
+    const afterCount = computeFilteredSA3Features().final.length;
+    _copilotHistory.push({ query: originalQuery, summary: intent.summary, beforeCount, afterCount, time: copilotTimeLabel() });
+    if (_copilotHistory.length > COPILOT_MAX_HISTORY) _copilotHistory.shift();
+
+    renderCopilotBanner(intent, cameraHeld);
+}
+
+function copilotTimeLabel() {
+    return new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function copilotResetApplied() {
+    State.regionFilter = null;
+    State.tierFilter = [];
+    State.supplyScoreMin = null;
+    applyWorkforceFilters();
+    updateRailStats();
+    updateFilterChips();
+    _copilotHistory = [];
+    hideCopilotBanner();
+}
+
+function showCopilotChecklist(show) {
+    document.getElementById('copilot-checklist')?.classList.toggle('hidden', !show);
+}
+
+function renderCopilotChecklist(steps) {
+    const body = document.getElementById('copilot-checklist-body');
+    const title = document.getElementById('copilot-checklist-title');
+    if (!body) return;
+    const doneCount = steps.filter((s) => s.status === 'done').length;
+    if (title) {
+        title.textContent = (steps.length && doneCount === steps.length)
+            ? `Done · ${steps.length} action${steps.length === 1 ? '' : 's'}`
+            : `Working · ${doneCount} of ${steps.length}`;
+    }
+    body.innerHTML = steps.map((s) => {
+        const icon = s.status === 'done' ? '✓' : (s.status === 'running' ? '▶' : '·');
+        return `
+            <div class="copilot-step ${s.status}">
+                <span class="copilot-step-icon ${s.status}">${icon}</span>
+                <span class="copilot-step-label">${s.label}</span>
+                <span class="copilot-step-tag">${s.tag}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+// Briefly highlights which of the 4 funnel steps the intent actually
+// touched (plan Phase H) — restarts the animation cleanly even if a
+// previous pulse is still fading, via the forced-reflow trick.
+function pulseRailSteps(railStepIds) {
+    railStepIds.forEach((id) => {
+        const el = document.getElementById('acc-' + id);
+        if (!el) return;
+        el.classList.remove('copilot-pulse');
+        void el.offsetWidth;
+        el.classList.add('copilot-pulse');
+        setTimeout(() => el.classList.remove('copilot-pulse'), 3300);
+    });
+}
+
+let _copilotLogOpen = true;
+
+function copilotToggleLog() {
+    _copilotLogOpen = !_copilotLogOpen;
+    renderCopilotBanner(_copilotLastIntent, _copilotLastCameraHeld);
+}
+
+let _copilotLastIntent = null;
+let _copilotLastCameraHeld = false;
+
+function hideCopilotBanner() {
+    document.getElementById('copilot-banner')?.classList.add('hidden');
+    document.getElementById('weight-warning') && updateWeightUI();
+}
+
+// Renders the one banner slot for every co-pilot outcome — applied,
+// partial, declined — plus the camera-held indicator and the expandable
+// multi-turn log. Same visual register throughout (plan Phase H): no
+// toast, no red, matching .weight-warning's existing amber "differs from
+// base case" treatment. Only one of .weight-warning/#copilot-banner shows
+// at a time — the co-pilot banner takes precedence while active since it's
+// the more specific, more recent state change.
+function renderCopilotBanner(intent, cameraHeld) {
+    _copilotLastIntent = intent;
+    _copilotLastCameraHeld = cameraHeld;
+    const el = document.getElementById('copilot-banner');
+    if (!el || !intent) return;
+
+    document.getElementById('weight-warning')?.classList.remove('visible');
+
+    if (intent.status === 'declined') {
+        el.className = 'copilot-banner declined';
+        el.innerHTML = `
+            <div class="copilot-banner-row">
+                <span class="copilot-banner-badge neutral">Out of scope</span>
+                <div class="copilot-banner-text">${intent.declineReason || "Can't do that yet."}</div>
+            </div>
+        `;
+        return;
+    }
+
+    const badgeLabel = intent.status === 'partial' ? 'Partial' : 'Copilot applied';
+    const skippedNote = (intent.status === 'partial' && intent.skipped?.length)
+        ? `<span class="copilot-banner-sub"> — skipped: ${intent.skipped.join('; ')}</span>` : '';
+    const latest = _copilotHistory[_copilotHistory.length - 1];
+    const scopeNote = latest ? `<span class="copilot-banner-sub"> — ${latest.afterCount} region${latest.afterCount === 1 ? '' : 's'} in view</span>` : '';
+
+    const logRows = _copilotHistory.slice().reverse().map((h) => `
+        <div class="copilot-banner-log-row">
+            <span class="copilot-banner-log-delta" style="color:var(--muted)">${h.time}</span>
+            <div class="copilot-banner-log-query">“${h.query}”</div>
+            <span class="copilot-banner-log-delta">${h.beforeCount} → ${h.afterCount}</span>
+        </div>
+    `).join('');
+
+    el.className = 'copilot-banner';
+    el.innerHTML = `
+        <div class="copilot-banner-row">
+            <span class="copilot-banner-badge">${badgeLabel}</span>
+            <div class="copilot-banner-text">${intent.summary || ''}${skippedNote}${scopeNote}</div>
+            <button class="copilot-banner-btn" onclick="copilotResetApplied()">Reset</button>
+            ${_copilotHistory.length > 1 ? `<button class="copilot-banner-toggle" onclick="copilotToggleLog()">${_copilotLogOpen ? '▴' : '▾'} ${_copilotHistory.length} turns</button>` : ''}
+        </div>
+        ${(_copilotLogOpen && _copilotHistory.length > 1) ? `<div class="copilot-banner-log">${logRows}</div>` : ''}
+        ${cameraHeld ? `
+            <div class="copilot-camera-held">
+                <span class="copilot-camera-held-badge">Camera held</span>
+                <span>Same regions in frame — refiltering inside the current view doesn't move the map.</span>
+            </div>
+        ` : ''}
+    `;
+    el.classList.remove('hidden');
 }
 
 // ============================================================

@@ -175,6 +175,18 @@
                 <!-- Legacy clinic search state hooks (hidden) -->
                 <div id="clinic-search-results" style="display:none"><div id="clinic-search-results-list"></div></div>
                 <div id="clinic-search-status" style="display:none"></div>
+                <!-- Natural-language co-pilot live checklist (plan Phase H) —
+                     anchored at the same spot #global-search-results uses,
+                     extending the existing ⌘K surface rather than floating a
+                     new panel over the map. Shows real steps as they're
+                     actually awaited by applyCopilotIntent() in app.js, not
+                     a fake timer. -->
+                <div class="copilot-checklist hidden" id="copilot-checklist">
+                    <div class="copilot-checklist-hdr">
+                        <span id="copilot-checklist-title">Working</span>
+                    </div>
+                    <div class="copilot-checklist-body" id="copilot-checklist-body"></div>
+                </div>
             </div>
             <span class="action-meta">Data vintage · Mar 2025</span>
             <a class="nav-btn" href="#" onclick="window.location.href='methodology.html?market='+(window.State?.markets?.current||'gp'); return false;" style="text-decoration:none; color:inherit; cursor:pointer; display:flex; align-items:center;">Methodology</a>
@@ -863,6 +875,15 @@
                 <div class="weight-warning" id="weight-warning">
                     Custom weighting active — results differ from base case
                 </div>
+
+                <!-- Co-pilot state banner (plan Phase H) — same floating
+                     slot/position/colour language as .weight-warning above
+                     ("state differs from base case"), extended with the
+                     richer content the co-pilot needs (Reset, expandable
+                     multi-turn log, decline/partial states). Only one of
+                     the two banners is ever shown at once — see
+                     renderCopilotBanner()/hideCopilotBanner() in app.js. -->
+                <div class="copilot-banner hidden" id="copilot-banner"></div>
 
                 <div class="map-tooltip" id="map-tooltip"></div>
 

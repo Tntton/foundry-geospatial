@@ -339,6 +339,35 @@ create table if not exists gp_billing_sa3_ltm (
 );
 create index if not exists gp_billing_sa3_ltm_sa3_code_idx on gp_billing_sa3_ltm (sa3_code);
 
+-- One-off backfill (not idempotent, run once): sa3.nra_* was originally loaded from a
+-- separate, older sa3_scored.geojson pipeline (see load_sa3_scored() in migrate.py),
+-- entirely independent of this table's own CSV ingestion. Verified live: the level
+-- fields (services, total fees, fees/service, bb_rate, out-of-pocket) already agreed
+-- to the dollar -- sa3 just stores them rounded. But the two *_l3y_cagr growth-rate
+-- fields disagreed on direction (not just magnitude) for 167 of 328 resolved SA3s --
+-- e.g. sa3 said bulk-billing was falling in a region where this table's fresher CSV
+-- said it was rising. Confirmed with the user this table is the more current source,
+-- and refreshed all 7 raw nra_* columns from it (not just the two CAGRs, so sa3 is a
+-- clean current mirror rather than a partial fix):
+--   update sa3 s set
+--     nra_services_count = b.services,
+--     nra_total_fees = round(b.fee_charged, 2),
+--     nra_fees_per_service = round(b.fee_charged / nullif(b.services,0), 2),
+--     nra_bb_rate = b.mbs_bulk_billing_rate,
+--     nra_out_of_pocket = round(b.out_of_pocket, 2),
+--     nra_fee_charged_cagr = b.fee_charged_l3y_cagr,
+--     nra_bb_rate_cagr = b.mbs_bb_rate_l3y_cagr
+--   from gp_billing_sa3_ltm b where b.sa3_code = s.sa3_code;
+-- KNOWN GAP left open, not silently patched: nra_score_bb_cagr/nra_score_fee_cagr
+-- (0-100 columns derived from the two CAGR fields just refreshed) are now stale
+-- relative to the new raw values. They looked like a simple percentile-rank of the
+-- raw value at a glance, but verified against the full dataset that guess only
+-- matches ~93-98% of rows, not exactly -- not safe to silently recompute with an
+-- approximated formula. Whoever owns the original scoring pipeline (the one that
+-- produces sa3_scored.geojson) needs to rerun it with the corrected CAGR inputs to
+-- get these two score columns right; nra_score_fees_per_service/nra_score_total_fees
+-- are unaffected (their own raw inputs didn't change).
+
 -- Named-region gazetteer (nav copilot data-gap audit, Gap 1 -- "blocking, even the
 -- anchor query fails without it"). Colloquial region names like "South-East
 -- Queensland" or "Western Sydney" are not ABS boundaries -- they don't exist as rows
@@ -425,32 +454,60 @@ on conflict (region_name, sa3_code) do nothing;
 -- than a single market-wide average: a market-wide number can hide a region sitting
 -- at 0% while another sits at 100%, and the brief's own example response
 -- ("...out of 47 in this region...") is inherently region-scoped, not market-wide.
--- Fields chosen are the ones already known to be genuinely partial (verified against
--- live data while building this: gp_count 38.8%, billing_type/allied_health/
--- pathology/radiology_imaging 12.4% -- matches the audit brief exactly). ownership/
--- corporate_chain are deliberately excluded -- both 100% populated for gp today, not
--- a completeness concern. total=0 for a (market_id, sa3_code) pair with pct_populated
--- null means "no clinics recorded here at all" -- a bigger gap than sparse coverage,
--- and the copilot's response logic needs to tell those two cases apart (confirmed
--- live: market_id='dental' currently has zero rows in `clinics` market-wide -- not a
--- coverage problem, a missing-dataset problem).
+--
+-- Field-to-market scoping, corrected after initially computing every field for every
+-- market regardless of relevance: pathology/radiology_imaging/allied_health/
+-- doctor_names/gp_count are gp-specific by schema design (clinics' own "gp-specific
+-- (null for other markets)" comment) -- computing them for physio/dental produced a
+-- wall of misleading 0.0% rows that read as "this market's data is a mess" when the
+-- fields simply don't apply there, exactly the false-completeness-signal this gap is
+-- supposed to prevent. Scoped those branches to market_id='gp' only. billing_type/
+-- clinic_format stay cross-market -- schema treats them as shared columns, and 0% for
+-- physio there is a genuine gap (data conceptually applies, just not collected), not
+-- a structural non-applicability. Physio's own relevant fields (rank/primary_segment/
+-- confidence/ndis/telehealth/segments) are added market-scoped the same way --
+-- verified live they're actually 100% populated already, so this mostly documents
+-- that physio's own data is clean, not a new gap to close. ownership/corporate_chain
+-- are deliberately excluded -- 100% populated for gp today, not a completeness
+-- concern (and not applicable to physio/dental per the same live check). total=0 for
+-- a (market_id, sa3_code) pair with pct_populated null means "no clinics recorded
+-- here at all" -- a bigger gap than sparse coverage, and the copilot's response logic
+-- needs to tell those two cases apart (confirmed live: market_id='dental' currently
+-- has zero rows in `clinics` market-wide -- not a coverage problem, a missing-dataset
+-- problem, so it produces no rows in this view at all rather than misleading zeros).
 create or replace view clinic_data_coverage as
 select market_id, sa3_code, field, total, populated,
        round(100.0 * populated / nullif(total, 0), 1) as pct_populated
 from (
-  select market_id, sa3_code, 'gp_count' as field, count(*) as total, count(gp_count) as populated from clinics group by market_id, sa3_code
+  -- gp-only fields (schema-designated "gp-specific (null for other markets)")
+  select market_id, sa3_code, 'gp_count' as field, count(*) as total, count(gp_count) as populated from clinics where market_id = 'gp' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'allied_health', count(*), count(allied_health) from clinics where market_id = 'gp' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'pathology', count(*), count(pathology) from clinics where market_id = 'gp' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'radiology_imaging', count(*), count(radiology_imaging) from clinics where market_id = 'gp' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'doctor_names', count(*), count(doctor_names) from clinics where market_id = 'gp' group by market_id, sa3_code
+  -- shared fields, computed across every market -- 0% here is a real gap, not a
+  -- structural non-applicability
   union all
   select market_id, sa3_code, 'billing_type', count(*), count(billing_type) from clinics group by market_id, sa3_code
   union all
-  select market_id, sa3_code, 'allied_health', count(*), count(allied_health) from clinics group by market_id, sa3_code
-  union all
-  select market_id, sa3_code, 'pathology', count(*), count(pathology) from clinics group by market_id, sa3_code
-  union all
-  select market_id, sa3_code, 'radiology_imaging', count(*), count(radiology_imaging) from clinics group by market_id, sa3_code
-  union all
-  select market_id, sa3_code, 'doctor_names', count(*), count(doctor_names) from clinics group by market_id, sa3_code
-  union all
   select market_id, sa3_code, 'clinic_format', count(*), count(clinic_format) from clinics group by market_id, sa3_code
+  -- physio-only fields
+  union all
+  select market_id, sa3_code, 'rank', count(*), count(rank) from clinics where market_id = 'physio' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'primary_segment', count(*), count(primary_segment) from clinics where market_id = 'physio' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'confidence', count(*), count(confidence) from clinics where market_id = 'physio' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'segments', count(*), count(segments) from clinics where market_id = 'physio' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'ndis', count(*), count(ndis) from clinics where market_id = 'physio' group by market_id, sa3_code
+  union all
+  select market_id, sa3_code, 'telehealth', count(*), count(telehealth) from clinics where market_id = 'physio' group by market_id, sa3_code
 ) t;
 
 -- Market-wide rollup of the same view, for "how complete is X overall" queries that
