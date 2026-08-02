@@ -18,7 +18,7 @@
     <!-- Supabase Auth -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=mob15" />
+    <link rel="stylesheet" href="css/styles.css?v=mob17" />
     <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
     <style>
         /* Hide login buttons */
@@ -96,29 +96,6 @@
             white-space: nowrap;
         }
 
-        /* Grey out clinics section for physio (collapsed) */
-        #acc-clinics.physio-disabled {
-            opacity: 0.5;
-        }
-
-        #acc-clinics.physio-disabled .rail-accordion-hdr {
-            cursor: not-allowed;
-            pointer-events: none;
-        }
-
-        #acc-clinics.physio-disabled .rail-accordion-body {
-            opacity: 0.8;
-            pointer-events: none;
-        }
-
-        /* The scoring-market dropdown (plan Phase D) lives inside this same
-           body but must stay usable even when physio greys out the
-           clinic-chain/archetype filters below it — otherwise there'd be no
-           way to switch off physio once selected. */
-        #acc-clinics.physio-disabled .market-dropdown {
-            opacity: 1;
-            pointer-events: auto;
-        }
 
         /* Fix data vintage at bottom of left rail */
         .rail-footer-bar {
@@ -165,16 +142,16 @@
 
         <span class="brand-divider" style="margin: 0 20px;"></span>
 
-        <!-- Market display pill — scoring market now switches in-app via
-             Step 1's dropdown (plan Phase D); this pill just mirrors state. -->
+        <!-- Market display — scoring market now switches in-app via Step 1's
+             dropdown (plan Phase D); this just mirrors state as plain text.
+             Deliberately not pill/button-styled (no background, border, or
+             cursor:pointer) — it isn't clickable, so it shouldn't look like
+             it is. -->
         <div class="market-switcher-wrapper" id="market-switcher-wrapper" style="flex-shrink:0;">
-            <div class="market-switcher-pill" id="market-selector-btn" aria-label="Current scoring market">
-                <span class="market-switcher-ab" id="market-selector-label">GP</span>
-                <span class="market-switcher-tx">
-                    <span class="market-switcher-eyebrow">MARKET</span>
-                    <span class="market-switcher-name" id="market-switcher-name">General Practice</span>
-                </span>
-            </div>
+            <span class="market-switcher-plain" id="market-selector-btn" aria-label="Current scoring market">
+                <span class="market-switcher-eyebrow">Market</span>
+                <span class="market-switcher-name" id="market-switcher-name">General Practice</span>
+            </span>
         </div>
 
         <!-- Spacer pushes actions to right -->
@@ -198,6 +175,18 @@
                 <!-- Legacy clinic search state hooks (hidden) -->
                 <div id="clinic-search-results" style="display:none"><div id="clinic-search-results-list"></div></div>
                 <div id="clinic-search-status" style="display:none"></div>
+                <!-- Natural-language co-pilot live checklist (plan Phase H) —
+                     anchored at the same spot #global-search-results uses,
+                     extending the existing ⌘K surface rather than floating a
+                     new panel over the map. Shows real steps as they're
+                     actually awaited by applyCopilotIntent() in app.js, not
+                     a fake timer. -->
+                <div class="copilot-checklist hidden" id="copilot-checklist">
+                    <div class="copilot-checklist-hdr">
+                        <span id="copilot-checklist-title">Working</span>
+                    </div>
+                    <div class="copilot-checklist-body" id="copilot-checklist-body"></div>
+                </div>
             </div>
             <span class="action-meta">Data vintage · Mar 2025</span>
             <a class="nav-btn" href="#" onclick="window.location.href='methodology.html?market='+(window.State?.markets?.current||'gp'); return false;" style="text-decoration:none; color:inherit; cursor:pointer; display:flex; align-items:center;">Methodology</a>
@@ -557,7 +546,10 @@
                                 <div class="market-dropdown-menu" id="market-dropdown-menu" role="listbox">
                                     <button type="button" class="market-dropdown-item active" data-market="gp" role="option" onclick="event.stopPropagation(); selectScoringMarket('gp');">General Practice</button>
                                     <button type="button" class="market-dropdown-item" data-market="physio" role="option" onclick="event.stopPropagation(); selectScoringMarket('physio');">Physiotherapy</button>
-                                    <button type="button" class="market-dropdown-item" data-market="dental" role="option" onclick="event.stopPropagation(); selectScoringMarket('dental');">Dental</button>
+                                    <!-- Dental omitted deliberately -- 0 clinics loaded for this
+                                         market today (confirmed live via clinic_field_coverage_by_market),
+                                         so offering it as a scoring market would only produce an
+                                         empty result. Re-add once real Dental data is loaded. -->
                                 </div>
                             </div>
                         </div>
@@ -572,7 +564,7 @@
                             <div class="mmm-chip-grid clinic-layer-grid" id="clinic-layer-toggles">
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span class="clinic-layer-row-name">General Practice</span><span class="clinic-layer-count" id="clinic-layer-count-gp"></span></label>
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span class="clinic-layer-row-name">Physiotherapy</span><span class="clinic-layer-count" id="clinic-layer-count-physio"></span></label>
-                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="dental" onchange="toggleClinicLayer('dental', this.checked)"><span class="clinic-layer-row-name">Dental</span><span class="clinic-layer-count" id="clinic-layer-count-dental"></span></label>
+                                <!-- Dental omitted deliberately -- 0 clinics loaded today, see comment above. -->
                             </div>
                         </div>
 
@@ -883,6 +875,15 @@
                 <div class="weight-warning" id="weight-warning">
                     Custom weighting active — results differ from base case
                 </div>
+
+                <!-- Co-pilot state banner (plan Phase H) — same floating
+                     slot/position/colour language as .weight-warning above
+                     ("state differs from base case"), extended with the
+                     richer content the co-pilot needs (Reset, expandable
+                     multi-turn log, decline/partial states). Only one of
+                     the two banners is ever shown at once — see
+                     renderCopilotBanner()/hideCopilotBanner() in app.js. -->
+                <div class="copilot-banner hidden" id="copilot-banner"></div>
 
                 <div class="map-tooltip" id="map-tooltip"></div>
 
@@ -1985,48 +1986,22 @@
         <div class="catalogue-modal-footer">
             <span class="catalogue-staged-status" id="catalogue-staged-status">No changes staged</span>
             <button class="acc-reset-link" onclick="closeDataCatalogue()">Cancel</button>
-            <button class="btn btn-primary" id="catalogue-load-btn" onclick="loadDataCatalogueSelections()" disabled>Load</button>
+            <button class="btn btn-primary" id="catalogue-load-btn" onclick="loadDataCatalogueSelections()">Load</button>
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr30"></script>
+<script src="js/app.js?v=rr34"></script>
 <script src="js/components/targets-tab.js?v=rr7"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 
 <script>
-// Initialize left rail UI based on market and settings
+// Initialize left rail UI on page load
 function initializeLeftRailUI() {
-    const market = new URLSearchParams(window.location.search).get('market') || 'gp';
-
     // Hide login buttons
     const loginBtn = document.getElementById('login-btn');
     const logoutBtn = document.getElementById('logout-btn');
     if (loginBtn) loginBtn.style.display = 'none';
     if (logoutBtn) logoutBtn.style.display = 'none';
-
-    // Step 1 (funnel rail, plan Phase C) stays open by default — "always
-    // the same order," the funnel starts at step 1, unlike the old
-    // independent-accordions model this replaced. Only grey it out for physio.
-    const accClinics = document.getElementById('acc-clinics');
-    const clinicsHdr = accClinics?.querySelector('.rail-accordion-hdr');
-
-    // For physio: grey out clinics (no chains/archetypes classified) and make non-clickable
-    if (market === 'physio' && accClinics) {
-        accClinics.classList.add('physio-disabled');
-        if (clinicsHdr) {
-            clinicsHdr.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                return false;
-            };
-        }
-    } else if (accClinics) {
-        accClinics.classList.remove('physio-disabled');
-        if (clinicsHdr) {
-            // Restore click handler for GP market
-            clinicsHdr.onclick = () => toggleAccordion('clinics');
-        }
-    }
 }
 
 // Run on DOM ready
