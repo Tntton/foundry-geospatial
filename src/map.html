@@ -18,7 +18,7 @@
     <!-- Supabase Auth -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=mob17" />
+    <link rel="stylesheet" href="css/styles.css?v=mob24" />
     <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
     <style>
         /* Hide login buttons */
@@ -127,6 +127,17 @@
 
 <div class="app">
 
+    <!-- Spotlight backdrop (⌘K) — dims the app while the search bar below
+         is elevated into a centered, enlarged overlay via body.spotlight-active.
+         Click to dismiss, same as clicking outside a modal. -->
+    <div class="spotlight-backdrop hidden" id="spotlight-backdrop" onclick="closeSpotlight()"></div>
+    <!-- ESC-to-close hint (plan Phase H follow-up) — a true top-level
+         sibling of the backdrop, not nested under .global-search-wrap:
+         that element gets a CSS transform in Spotlight mode, which would
+         make position:fixed here resolve relative to IT instead of the
+         real viewport. -->
+    <kbd class="spotlight-esc-hint" id="spotlight-esc-hint" onclick="closeSpotlight()">ESC</kbd>
+
     <!-- ============================================================
          Header
          ============================================================ -->
@@ -161,15 +172,21 @@
             <!-- Global search — relocated from the rail's sticky header to
                  the top-right of the app header (plan Phase G). Same ids/JS
                  wiring, just moved. -->
-            <div class="global-search-wrap">
-                <div class="global-search">
+            <div class="global-search-wrap" id="global-search-wrap">
+                <div class="global-search" onclick="openSpotlight()">
                     <svg class="global-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none">
                         <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
                         <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                     </svg>
-                    <input type="text" id="global-search-input" class="global-search-input" placeholder="Search SA3, clinic, chain…" autocomplete="off" />
-                    <kbd class="global-search-kbd">⌘K</kbd>
+                    <input type="text" id="global-search-input" class="global-search-input" placeholder="Search, or ask a question…" autocomplete="off" />
+                    <span class="global-search-ai-badge" title="Press ⌘K to search or ask the co-pilot a question">✦ Ask AI <kbd>⌘K</kbd></span>
                     <button id="global-search-clear" class="global-search-clear" style="display:none">✕</button>
+                </div>
+                <!-- Co-pilot discoverability hint (plan Phase H follow-up) —
+                     only shown in Spotlight mode with an empty input, so it
+                     doesn't compete with the compact header search box. -->
+                <div class="spotlight-hint" id="spotlight-hint">
+                    Search a region, clinic or chain — or ask a question, e.g. <em>"tier 1 and 2 GP regions in South-East Queensland with independent ownership"</em>
                 </div>
                 <div class="global-search-results" id="global-search-results"></div>
                 <!-- Legacy clinic search state hooks (hidden) -->
@@ -216,7 +233,7 @@
         <button class="mob-lens-chip lens-seg" data-lens="workforce">Workforce</button>
         <span id="mob-catalogue-lens-chips"></span>
         <button class="mob-lens-chip mob-lens-nra" id="mob-lens-nra-btn">GP Billings <span class="mob-lens-arrow">▾</span></button>
-        <button class="mob-search-btn" id="mob-search-btn" aria-label="Search">
+        <button class="mob-search-btn" id="mob-search-btn" aria-label="Search or ask a question" onclick="openSpotlight()">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
                 <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
@@ -1990,7 +2007,7 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr34"></script>
+<script src="js/app.js?v=rr35"></script>
 <script src="js/components/targets-tab.js?v=rr7"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 

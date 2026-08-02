@@ -6650,9 +6650,16 @@ function wireUI() {
     }
 
     if (globalSearchInput) {
-        globalSearchInput.addEventListener('input', (e) => runGlobalSearch(e.target.value.trim()));
+        globalSearchInput.addEventListener('input', (e) => {
+            const q = e.target.value.trim();
+            runGlobalSearch(q);
+            updateSpotlightHint(q);
+        });
         globalSearchInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none'; }
+            if (e.key === 'Escape') {
+                globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none';
+                closeSpotlight();
+            }
             // Natural-language co-pilot (plan Phase H) — Enter did nothing on
             // this input before; extends the existing ⌘K surface rather than
             // adding a second "ask the AI" panel. Typing-as-you-go behavior
@@ -6663,19 +6670,23 @@ function wireUI() {
                 globalSearchClear.style.display = 'none';
                 const q = globalSearchInput.value.trim();
                 globalSearchInput.value = '';
-                runCopilotQuery(q);
+                updateSpotlightHint('');
+                runCopilotQuery(q); // closes Spotlight itself once the whole run finishes — see closeSpotlight() call sites
             }
         });
         document.addEventListener('click', (e) => { if (!e.target.closest('.global-search-wrap')) globalSearchResults.innerHTML = ''; });
     }
     if (globalSearchClear) {
-        globalSearchClear.addEventListener('click', () => { globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none'; });
+        globalSearchClear.addEventListener('click', () => { globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none'; updateSpotlightHint(''); });
     }
-    // ⌘K shortcut
+    // ⌘K shortcut (plan Phase H follow-up) — opens the Spotlight overlay
+    // rather than just focusing the input in place.
     document.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
             e.preventDefault();
-            globalSearchInput?.focus();
+            openSpotlight();
+        } else if (e.key === 'Escape' && document.body.classList.contains('spotlight-active')) {
+            closeSpotlight();
         }
     });
 
@@ -7395,6 +7406,29 @@ function buildCopilotSteps(intent) {
     return steps;
 }
 
+// Spotlight ⌘K overlay (plan Phase H follow-up) — the existing header
+// search bar elevates in place into a centered, enlarged overlay via this
+// state class (see styles.css); no separate cloned input, no second
+// surface, same ids/wiring throughout. Stays open through the checklist so
+// the "show your work" steps read as a focused moment, and closes itself
+// once runCopilotQuery()/applyCopilotIntent() actually finish (success,
+// decline, or network failure) or a search result gets picked.
+function openSpotlight() {
+    document.body.classList.add('spotlight-active');
+    document.getElementById('spotlight-backdrop')?.classList.remove('hidden');
+    const input = document.getElementById('global-search-input');
+    input?.focus();
+    updateSpotlightHint(input?.value.trim() || '');
+}
+function closeSpotlight() {
+    document.body.classList.remove('spotlight-active');
+    document.getElementById('spotlight-backdrop')?.classList.add('hidden');
+    document.getElementById('global-search-input')?.blur();
+}
+function updateSpotlightHint(query) {
+    document.getElementById('spotlight-hint')?.classList.toggle('visible', !query);
+}
+
 // The one entry point wired to Enter on #global-search-input (plan Phase H).
 async function runCopilotQuery(query) {
     const trimmed = (query || '').trim();
@@ -7418,11 +7452,13 @@ async function runCopilotQuery(query) {
         if (!res.ok || !data.intent) {
             showCopilotChecklist(false);
             renderCopilotBanner({ status: 'declined', declineReason: data.error || "Couldn't reach the co-pilot just now — try again." });
+            closeSpotlight();
             return;
         }
     } catch {
         showCopilotChecklist(false);
         renderCopilotBanner({ status: 'declined', declineReason: "Couldn't reach the co-pilot just now — try again." });
+        closeSpotlight();
         return;
     }
 
@@ -7492,6 +7528,7 @@ async function applyCopilotIntent(intent, originalQuery) {
     if (_copilotHistory.length > COPILOT_MAX_HISTORY) _copilotHistory.shift();
 
     renderCopilotBanner(intent, cameraHeld);
+    closeSpotlight();
 }
 
 function copilotTimeLabel() {
@@ -7744,6 +7781,7 @@ function deactivatePreset() {
 function searchGotoSA3(sa3Code) {
     document.getElementById('global-search-results').innerHTML = '';
     document.getElementById('global-search-input').value = '';
+    closeSpotlight();
     const feature = State.sa3Data?.features.find(f => f.properties.SA3Code === sa3Code);
     if (feature && map) {
         const bbox = turf.bbox(feature);
@@ -7755,6 +7793,7 @@ function searchGotoSA3(sa3Code) {
 function searchGotoClinic(clinicId) {
     document.getElementById('global-search-results').innerHTML = '';
     document.getElementById('global-search-input').value = '';
+    closeSpotlight();
     const clinic = State.clinicsData.find(c => String(c.clinic_id) === String(clinicId));
     if (clinic && map) {
         map.flyTo({ center: [parseFloat(clinic.longitude), parseFloat(clinic.latitude)], zoom: 13, duration: 600 });
@@ -7767,6 +7806,7 @@ function searchGotoClinic(clinicId) {
 function searchActivateChain(chainName) {
     document.getElementById('global-search-results').innerHTML = '';
     document.getElementById('global-search-input').value = '';
+    closeSpotlight();
     if (!State.clinicChainFilter.includes(chainName)) {
         State.clinicChainFilter.push(chainName);
         const checkbox = document.querySelector(`.clinic-chain-checkbox[data-chain="${chainName}"]`);

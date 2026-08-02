@@ -7073,3 +7073,133 @@ input, select { font-family: inherit; }
    visibly operates the same rail a click would. */
 @keyframes copilotPulseStep { 0%, 100% { background: var(--white); } 50% { background: var(--sage-wash); } }
 .rail-accordion.copilot-pulse { animation: copilotPulseStep 1.6s ease-in-out 2; }
+
+/* ============================================================
+ * Spotlight ⌘K overlay (plan Phase H follow-up)
+ * ============================================================
+ * The existing header search bar elevates in place into a centered,
+ * enlarged overlay — no separate cloned input, no second surface. Same
+ * element, same ids/JS wiring throughout; only its position/size changes
+ * via this state class, matching how the rest of this app prefers
+ * generalizing an existing control over inventing a new one. */
+.spotlight-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 22, 20, 0.55);
+    backdrop-filter: blur(2px);
+    z-index: 900;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.spotlight-backdrop.hidden { display: none; }
+body.spotlight-active .spotlight-backdrop { opacity: 1; }
+
+/* .app-header establishes its own stacking context (position:relative +
+   z-index:50) — .global-search-wrap's z-index:901 below only wins against
+   its OWN siblings inside that context, never against .spotlight-backdrop
+   (a sibling of .app-header itself, not of .global-search-wrap). Without
+   this, the backdrop silently paints over the enlarged search bar and
+   swallows every click meant for the results list. Raise the header's own
+   stacking position instead of chasing z-index numbers deeper down. */
+body.spotlight-active .app-header { position: relative; z-index: 950; }
+
+/* Mobile (<1024px) hides .app-header entirely (`display:none !important`,
+   replaced by .mob-topbar) — an ancestor's display:none prevents anything
+   inside from rendering at all, fixed-position or not, so Spotlight needs
+   to selectively bring just the search wrap's chain back rather than the
+   whole header (brand/methodology/login would otherwise clutter a 375px
+   screen alongside the enlarged centered search bar). */
+@media (max-width: 1024px) {
+    body.spotlight-active .app-header {
+        display: block !important;
+        background: transparent;
+        border-bottom: none;
+        padding: 0;
+        pointer-events: none;
+    }
+    body.spotlight-active .app-header > *:not(.actions) { display: none !important; }
+    body.spotlight-active .app-header .actions > *:not(.global-search-wrap) { display: none !important; }
+    body.spotlight-active .app-header .actions { display: block; pointer-events: none; }
+    body.spotlight-active .global-search-wrap { pointer-events: auto; }
+}
+
+body.spotlight-active .global-search-wrap {
+    position: fixed;
+    top: 14vh;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(620px, 90vw);
+    z-index: 901;
+    animation: spotlightIn 0.16s ease both;
+}
+@keyframes spotlightIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+body.spotlight-active .global-search {
+    padding: 14px 16px;
+    border-radius: 8px;
+    border-color: var(--sage);
+    background: var(--white);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+}
+body.spotlight-active .global-search-icon { width: 17px; height: 17px; }
+body.spotlight-active .global-search-input { font-size: 17px; }
+body.spotlight-active .global-search-ai-badge { display: none; } /* redundant once you're already in it */
+
+/* Collapsed header search bar — flags AI capability up front rather than
+   relying on placeholder text alone (user feedback: "not just search"). */
+.global-search-ai-badge {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--sage-deep);
+    background: var(--sage-tint);
+    border: 1px solid var(--sage-light);
+    border-radius: 10px;
+    padding: 2px 7px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.global-search-ai-badge kbd {
+    font-family: var(--sans);
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--sage-deep);
+    opacity: 0.75;
+}
+
+/* Hint text sits directly on the dimmed/blurred backdrop (no white card
+   behind it), so it needs light text, not the app's usual dark-on-light
+   muted grey. */
+.spotlight-hint {
+    display: none;
+    padding: 10px 16px 2px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: rgba(255,255,255,0.75);
+}
+.spotlight-hint em { color: #fff; font-style: normal; font-weight: 600; }
+body.spotlight-active .spotlight-hint.visible { display: block; }
+
+/* ESC-to-close hint, top-left of the dimmed backdrop. */
+.spotlight-esc-hint {
+    display: none;
+    position: fixed;
+    top: 72px; /* below .app-header's own 56px band, not inside it — the light/translucent styling below assumes it sits over the dark dimmed backdrop, not the header's opaque white background */
+    left: 20px;
+    z-index: 960; /* above .app-header's own spotlight-active z-index:950, same stacking-context lesson as the search wrap fix above */
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(255,255,255,0.14);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 4px;
+    padding: 5px 9px;
+    cursor: pointer;
+}
+body.spotlight-active .spotlight-esc-hint { display: inline-block; }
