@@ -1000,10 +1000,7 @@ async function switchMarket(marketId) {
             productName.textContent = config.market_name || 'Market';
         }
 
-        // Update market switcher pill
-        const label = document.getElementById('market-selector-label');
-        const abbrevMap = { gp: 'GP', physio: 'PHY', dental: 'DEN' };
-        if (label) label.textContent = abbrevMap[marketId] || marketId.toUpperCase().slice(0, 3);
+        // Update market switcher display
         const nameEl = document.getElementById('market-switcher-name');
         if (nameEl) nameEl.textContent = config.market_name || 'Market';
         // Mirror the market name into the mobile top-bar switcher
@@ -1051,13 +1048,6 @@ async function switchMarket(marketId) {
         renderClinicLayerCheckboxes();  // plan Phase E
         renderClinicLayerLegend();  // plan Phase F
         renderCatalogueLensChips();  // plan Phase G — re-sync dynamic SEIFA chip across market switch
-
-        // Re-run the physio-disabled greying logic (defined inline in
-        // map.html, reads market from the URL param setQueryParam() above
-        // just updated) — plan Phase C flagged this as going stale once
-        // switchMarket() became reachable from a live in-app control
-        // instead of only the old index.html round-trip.
-        if (typeof initializeLeftRailUI === 'function') initializeLeftRailUI();
 
         loaderEl.classList.add('hide');
         console.log(`[market] Switched to ${marketId} successfully`);
@@ -2542,9 +2532,9 @@ const CATALOGUE_CATEGORIES = [
         desc: 'Who is already serving this population — sites on the ground, and the practitioners inside them.',
         sections: [
             { name: 'Sites & Business Counts', items: [
-                { label: 'General practice clinics', hint: 'NHSD · Mar 2025 — the scoring market’s own layer is always on', layerToggle: 'gp', type: 'PINS' },
-                { label: 'Physiotherapy clinics', hint: 'NHSD · Mar 2025 — optional overlay, same toggle as Step 1', layerToggle: 'physio', type: 'PINS' },
-                { label: 'Dental clinics', hint: 'NHSD · Mar 2025 — optional overlay, same toggle as Step 1', layerToggle: 'dental', type: 'PINS' },
+                { label: 'General practice clinics', hint: 'NHSD · Mar 2025', layerToggle: 'gp', type: 'PINS' },
+                { label: 'Physiotherapy clinics', hint: 'NHSD · Mar 2025', layerToggle: 'physio', type: 'PINS' },
+                { label: 'Dental clinics', hint: 'NHSD · Mar 2025 — 0 clinics loaded for this market today', available: false, type: 'PINS' },
                 { label: 'Community pharmacies', hint: 'PBS approved suppliers · Feb 2025', available: false, type: 'PINS' },
                 { label: 'Public hospitals & emergency departments', hint: 'AIHW · Jan 2025', available: false, type: 'PINS' },
                 { label: 'Telehealth-only providers', hint: 'MyHR · Mar 2025', available: false, type: 'PINS' },
@@ -2684,13 +2674,24 @@ function renderCatalogueDetail(key) {
                     const layer = i.layerToggle;
                     const isPrimary = layer === State.markets.current;
                     const checked = isPrimary || State.activeClinicLayers.includes(layer);
-                    const badge = isPrimary ? '<span class="catalogue-row-badge">Scoring market</span>' : '';
+                    // Unlike seifa/workforce/gpBillings below, clinic layers apply the
+                    // instant you click them (same as Step 1's own checkboxes) -- they're
+                    // never staged, so "Load" never lights up for them. Without a visual
+                    // cue that's easy to misread as "the checkbox didn't do anything" --
+                    // a real bug report turned out to be exactly this confusion, not a
+                    // broken checkbox. The badge/hint make the immediate-effect explicit.
+                    const badge = isPrimary
+                        ? '<span class="catalogue-row-badge">Scoring market</span>'
+                        : (checked ? '<span class="catalogue-row-badge catalogue-row-badge-live">On the map now</span>' : '');
+                    const hint = isPrimary
+                        ? `${i.hint} — the scoring market's own layer is always on`
+                        : `${i.hint} — optional overlay, applies instantly on click, not part of "Load" below`;
                     return `
                         <label class="catalogue-row${isPrimary ? ' locked' : ''}">
                             <input type="checkbox" ${checked ? 'checked' : ''} ${isPrimary ? 'disabled' : ''} onchange="toggleClinicLayer('${layer}', this.checked)">
                             <div>
                                 <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
-                                <div class="catalogue-row-hint">${i.hint}</div>
+                                <div class="catalogue-row-hint">${hint}</div>
                             </div>
                         </label>
                     `;
@@ -2756,8 +2757,18 @@ function renderCatalogueFooter() {
     const count = catalogueStagedChangeCount();
     const statusEl = document.getElementById('catalogue-staged-status');
     if (statusEl) statusEl.textContent = count === 0 ? 'No changes staged' : `${count} change${count === 1 ? '' : 's'} staged`;
+    // Never disabled -- clinic-layer toggles (see layerToggle rows above) apply
+    // instantly and aren't part of this staged count, so a user who only touched
+    // those would otherwise be stuck using "Cancel" to close, which reads as
+    // discarding a change that already took effect. Load always safely closes:
+    // it commits the staged seifa/workforce/gpBillings diff if there is one, and
+    // is a harmless no-op close otherwise -- relabelled "Done" in that case so it
+    // doesn't read as loading nothing.
     const loadBtn = document.getElementById('catalogue-load-btn');
-    if (loadBtn) loadBtn.disabled = count === 0;
+    if (loadBtn) {
+        loadBtn.disabled = false;
+        loadBtn.textContent = count === 0 ? 'Done' : 'Load';
+    }
 }
 
 function openDataCatalogue() {
@@ -2773,9 +2784,10 @@ function closeDataCatalogue() {
 }
 
 function loadDataCatalogueSelections() {
-    if (catalogueStagedChangeCount() === 0) return;
-    State.catalogueLoaded = { ...catalogueStaged };
-    applyCatalogueLoadedState();
+    if (catalogueStagedChangeCount() > 0) {
+        State.catalogueLoaded = { ...catalogueStaged };
+        applyCatalogueLoadedState();
+    }
     closeDataCatalogue();
 }
 

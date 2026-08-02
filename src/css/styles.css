@@ -210,62 +210,30 @@ input, select { font-family: inherit; }
     z-index: 100;
 }
 
-.market-switcher-pill {
+/* Plain text, deliberately not button/pill-styled — this display is a
+   read-only mirror of the scoring market (set via Step 1's dropdown), not
+   a control of its own, so it shouldn't carry any affordance suggesting
+   it's clickable. */
+.market-switcher-plain {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 5px 12px 5px 5px;
-    background: #fff;
-    border: 1px solid var(--hairline);
-    border-radius: 8px;
-    cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s;
-    font-family: inherit;
+    align-items: baseline;
+    gap: 6px;
     white-space: nowrap;
 }
 
-/* Pill is now an <a> link to home — subtle hover */
-.market-switcher-wrapper:hover .market-switcher-pill {
-    border-color: var(--sage);
-    box-shadow: 0 0 0 2px var(--sage-tint);
-}
-
-.market-switcher-ab {
-    width: 34px;
-    height: 34px;
-    border-radius: 6px;
-    background: var(--sage-deep);
-    color: #fff;
-    display: grid;
-    place-items: center;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    flex-shrink: 0;
-}
-
-.market-switcher-tx {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    line-height: 1.2;
-}
-
 .market-switcher-eyebrow {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
     color: var(--muted);
     text-transform: uppercase;
 }
 
 .market-switcher-name {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--ink);
 }
-
-/* .market-switcher-caret removed — no dropdown, pill is a home link */
 
 .market-selector-menu {
     position: absolute;
@@ -1001,6 +969,14 @@ input, select { font-family: inherit; }
     border: 1px solid var(--hairline);
 }
 .catalogue-row-badge-unavailable::before { content: none; }
+/* Distinct from the amber "required by model" badge -- this signals an active,
+   already-applied state (a clinic layer toggle took effect), not a lock. */
+.catalogue-row-badge-live {
+    background: var(--sage-tint);
+    color: var(--sage-deep);
+    border: 1px solid var(--sage);
+}
+.catalogue-row-badge-live::before { content: '● '; }
 .catalogue-row.locked { background: var(--surface-2); }
 .catalogue-row.locked .catalogue-row-label,
 .catalogue-row.locked .catalogue-row-hint { opacity: 0.75; }
@@ -6802,20 +6778,10 @@ input, select { font-family: inherit; }
 }
 
 /* ============================================================
- * Market-switcher pill — compact on mobile
- * The two-line pill (MARKET / General Practice) is too tall for
- * the phone header; shrink it so it sits comfortably in the bar.
+ * Market-switcher display — compact on mobile
+ * Hide the "MARKET" eyebrow label on narrow screens, keep just the name.
  * ============================================================ */
 @media (max-width: 1024px) {
-    .market-switcher-pill {
-        padding: 5px 10px 5px 6px;
-        gap: 7px;
-    }
-    .market-switcher-ab {
-        width: 26px;
-        height: 26px;
-        font-size: 11px;
-    }
     .market-switcher-eyebrow { display: none; }
     .market-switcher-name { font-size: 12px; line-height: 1; }
 }
