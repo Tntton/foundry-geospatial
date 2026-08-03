@@ -146,6 +146,11 @@ function buildSystemPrompt(gazetteer, stateJson) {
         `- Before claiming a field/dataset "isn't available" or the data "is too sparse to trust" for a market, call ` +
         `query_data_coverage and use its real numbers -- don't assume from the field's name alone. A market can also ` +
         `have literally zero clinics on file (check totalMatches/coverage before describing a market's data at all).\n` +
+        `- When you need several independent lookups (e.g. comparing multiple named regions, or a region's data plus ` +
+        `its clinics), call all of them in the SAME turn rather than one at a time across separate turns -- tool ` +
+        `calls made together in one turn run concurrently and cost far less time than spreading them across ` +
+        `sequential turns. Only split a lookup into a later turn when it genuinely depends on an earlier result you ` +
+        `don't have yet (e.g. resolving a region's SA3 codes before filtering by them).\n` +
         `- Use the conversation so far to resolve follow-ups ("now just the top 5", "does this one have workforce ` +
         `risk issues" while the user is looking at a specific region/clinic, per the currentState below) -- only ` +
         `change what the new message actually asks to change.\n` +

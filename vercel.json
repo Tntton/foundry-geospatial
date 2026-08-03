@@ -4,6 +4,6 @@
     { "source": "/:path*", "destination": "/src/:path*" }
   ],
   "functions": {
-    "api/assistant.js": { "maxDuration": 60 }
+    "api/assistant.js": { "maxDuration": 120 }
   }
 }
