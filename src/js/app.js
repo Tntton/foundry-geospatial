@@ -77,15 +77,16 @@ const State = {
     sa3ClinicCounts: {},
     currentState: '',
     currentSA3Code: null,
+    currentClinicId: null,   // which clinic renderClinicDrawer() last showed -- see its own comment; used by Copilot.currentFocus()
     currentView: 'map',
     currentMapView: 'composite',    // 'composite' | 'whitespace' | 'seifa'
     seifaRange: [1, 10],            // legacy; use seifaDeciles
     seifaDeciles: [],               // SEIFA decile chips; [] = all shown
     mmmFilter: [],                  // array of MMM class ints; [] = no filter
-    // Copilot-only filters (plan Phase H) — no manual rail control for
-    // either, deliberately: the brief's non-goals rule out adding new rail
-    // UI, so these are only ever set by applyCopilotIntent() and cleared via
-    // their own removable filter chip (see updateFilterChips()).
+    // Assistant-only filters — no manual rail control for either,
+    // deliberately: these are only ever set by Copilot.executePlan() and
+    // cleared via their own removable filter chip (see updateFilterChips())
+    // or Copilot.resetAppliedState().
     tierFilter: [],                 // array of allowed tier ints (1-5); [] = no filter
     regionFilter: null,             // { name, sa3Codes } | null — resolved gazetteer region
     supplyScoreMin: null,           // number | null — "low competitive density" resolved threshold, see resolveLowDensityThreshold()
@@ -116,8 +117,8 @@ const State = {
     activeClinicIsochrone: null,
     selectedClinics: [],
     comparisonIsochrones: {},
-    acquisitionReads: {},   // clinic_id -> { phase: 'idle'|'loading'|'result', collapsed, thread: [] }
-    regionReads: {}         // SA3Code  -> { phase: 'idle'|'loading'|'result', thread: [] }
+    acquisitionReads: {},   // clinic_id -> { phase: 'idle'|'loading'|'result', collapsed } -- Q&A lives in Copilot.messages now, not here
+    regionReads: {}         // SA3Code  -> { phase: 'idle'|'loading'|'result' }
 };
 
 // ============================================================
@@ -422,25 +423,10 @@ function escJsAttr(v) {
     return String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-// Live follow-up Q&A (Acquisition/Region read) — the one part of that
-// feature that calls a real model (api/ask-read.js, Claude Haiku 4.5). The
-// four-dimension scorecard itself stays a deterministic heuristic; see
-// plan Phase 6. `context` is exactly the already-computed read result
-// (computeAcquisitionRead/computeRegionRead output) — no re-derivation.
-async function fetchLiveAnswer(scope, question, context) {
-    try {
-        const res = await fetch('/api/ask-read', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ scope, question, context })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.answer) return { ok: false, text: data.error || "Couldn't reach the model just now — try again." };
-        return { ok: true, text: data.answer };
-    } catch (e) {
-        return { ok: false, text: "Couldn't reach the model just now — try again." };
-    }
-}
+// fetchLiveAnswer() (the api/ask-read.js client) is retired -- its two
+// callers (regionReadAskFreeform/acqReadAskFreeform) were absorbed into
+// the global assistant panel (Copilot.send(), copilot-panel.js), which
+// calls /api/assistant directly.
 
 function fmtStamp(d) {
     if (!d) return '';
@@ -551,13 +537,14 @@ async function fetchMarketConfigFromSupabase(marketId) {
     return data.config;
 }
 
-// Named-region gazetteer (plan Phase H) — resolves a real curated region
-// name (e.g. "South-East Queensland", see scripts/supabase_migration/
-// schema.sql's region_definitions/region_gazetteer_members tables) to its
-// explicit SA3 code list. The copilot backend already validates regionName
-// against this same table before it ever reaches here (api/copilot.js) —
-// this is the client-side lookup that turns the validated name into an
-// actual filter. Cached by name since the gazetteer is small and static.
+// Named-region gazetteer — resolves a real curated region name (e.g.
+// "South-East Queensland", see scripts/supabase_migration/schema.sql's
+// region_definitions/region_gazetteer_members tables) to its explicit SA3
+// code list. api/assistant.js already validates regionName against this
+// same table (and grounds it against tool-result ids) before a plan step
+// ever reaches here — this is the client-side lookup that turns the
+// validated name into an actual filter. Cached by name since the
+// gazetteer is small and static.
 const _regionGazetteerCache = {};
 async function resolveGazetteerRegion(regionName) {
     if (!regionName) return null;
@@ -2770,6 +2757,39 @@ function selectCatalogueCategory(key) {
     renderCatalogueDetail(key);
 }
 
+// Which CATALOGUE_CATEGORIES entry a given optional dataset key (seifa/
+// workforce/gpBillings) lives under -- used by focusCatalogueItem() below
+// to know which category to select before scrolling to the row.
+function catalogueCategoryForKey(key) {
+    for (const cat of CATALOGUE_CATEGORIES) {
+        for (const section of visibleCatalogueSections(cat)) {
+            if (section.items.some((i) => i.key === key)) return cat.key;
+        }
+    }
+    return null;
+}
+
+// Opens the Data Catalogue to the right category and scrolls/flashes the
+// matching row -- used by Copilot.followLink('catalogue', ...) for
+// [[catalogue:seifa|...]]-style deep-link tokens. Always a specific
+// dataset key, never a bare category name (simpler than supporting two
+// granularities, and every real optional dataset already has a stable
+// data-key selector on its checkbox -- see renderCatalogueDetail()).
+function focusCatalogueItem(key) {
+    const catKey = catalogueCategoryForKey(key);
+    if (!catKey) return;
+    openDataCatalogue();
+    selectCatalogueCategory(catKey);
+    setTimeout(() => {
+        const row = document.querySelector(`#catalogue-modal-detail .catalogue-item-checkbox[data-key="${key}"]`)?.closest('.catalogue-row');
+        if (row) {
+            row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            row.classList.add('td-row-flash');
+            setTimeout(() => row.classList.remove('td-row-flash'), 1600);
+        }
+    }, 150);
+}
+
 function stageCatalogueItem(key, checked) {
     catalogueStaged[key] = checked;
     renderCatalogueNav(); // refresh the "X of Y loaded" counts + Load button state
@@ -3455,6 +3475,7 @@ function closeDrawer() {
         lastSelectedId = null;
     }
     State.currentSA3Code = null;
+    State.currentClinicId = null;
     if (isMobile()) {
         hideBackdrop();
         const rail = document.getElementById('map-rail');
@@ -3487,6 +3508,9 @@ function selectClinic(clinic) {
 }
 
 function renderClinicDrawer(clinic) {
+    // See renderDrawer()'s matching comment -- this is the one place that
+    // marks "a clinic is what's currently showing," for Copilot.currentFocus().
+    State.currentClinicId = clinic.clinic_id;
     // Write into drawer-body (preserves the drawer shell so SA3 clicks still work)
     const drawerBody = document.getElementById('drawer-body');
 
@@ -3664,6 +3688,14 @@ function closeRail() {
 // Drawer rendering
 // ============================================================
 function renderDrawer(feature) {
+    // The drawer element is shared between region and clinic content
+    // (renderClinicDrawer below) -- a region render always means the
+    // clinic that might previously have been showing is no longer in
+    // view. State.currentClinicId is Copilot.currentFocus()'s only way
+    // to tell "region drawer open" from "clinic drawer open" (they share
+    // one DOM shell), so it must be cleared here, not just set on the
+    // clinic side.
+    State.currentClinicId = null;
     const p = feature.properties;
     const tier = parseInt(p.Tier);
     const tierColor = TIER_COLORS[tier];
@@ -3732,7 +3764,7 @@ function renderDrawer(feature) {
     const showRegionRead = State.markets.current === 'gp' && counts.total > 0;
     if (showRegionRead) {
         if (!State.regionReads[p.SA3Code]) {
-            State.regionReads[p.SA3Code] = { phase: 'idle', thread: [] };
+            State.regionReads[p.SA3Code] = { phase: 'idle' };
         }
         State.regionReads[p.SA3Code].ctx = { p, counts, tier, composite, competition, sa3Clinics };
     }
@@ -4326,18 +4358,7 @@ function buildRegionReadHTML(sa3Code) {
                     <div class="rd-chips">
                         ${read.chips.map((c, i) => `<button class="rd-chip" onclick="regionReadAskChip('${idAttr}', ${i})">${c.label}</button>`).join('')}
                     </div>
-                    ${st.thread.map(t => `
-                        <div class="rd-thread-item rd-fadein">
-                            <div class="rd-thread-q">${t.q}</div>
-                            <div class="rd-thread-a">${t.pending ? '<span class="rd-blink-dot"></span> Thinking…' : t.a}</div>
-                            ${t.live && !t.pending ? '<div class="rd-live-tag">Model-generated — verify independently</div>' : ''}
-                        </div>
-                    `).join('')}
-                    <div class="rd-followup-row">
-                        <input class="rd-followup-input" id="region-read-draft-${idAttr}" placeholder="Ask a follow-up about this region…" onkeydown="if(event.key==='Enter') regionReadAskFreeform('${idAttr}')" />
-                        <button class="rd-followup-send" onclick="regionReadAskFreeform('${idAttr}')">↩</button>
-                    </div>
-                    <div class="rd-followup-note">Scored dimensions above are computed, not model-generated. Suggested questions reuse that computation instantly; free-form questions call a live model scoped to this SA3 only.</div>
+                    <div class="rd-ask-redirect">Ask a follow-up about this region in <button class="rd-link-btn" onclick="Copilot.openForCurrentContext()">Ask Foundry →</button></div>
                 </div>
             </div>
         `;
@@ -4364,7 +4385,6 @@ function regionReadGenerate(sa3Code) {
     if (!st || !st.ctx) return;
     clearTimeout(st._timer);
     st.phase = 'loading';
-    st.thread = [];
     renderRegionReadSection(sa3Code);
     st._timer = setTimeout(() => {
         const ctx = st.ctx;
@@ -4375,31 +4395,16 @@ function regionReadGenerate(sa3Code) {
     }, 1600);
 }
 
+// Pushes this canned Q+A into the global assistant panel (Copilot.messages)
+// instead of a local thread scoped to this drawer -- absorbed per the plan
+// (one conversation, not per-entity mini-threads). Still instant/zero-
+// network-call, same as before.
 function regionReadAskChip(sa3Code, idx) {
     const st = State.regionReads[sa3Code];
     if (!st || !st.result) return;
     const c = st.result.chips[idx];
     if (!c) return;
-    st.thread.push({ q: c.label, a: c.answer });
-    renderRegionReadSection(sa3Code);
-}
-
-async function regionReadAskFreeform(sa3Code) {
-    const st = State.regionReads[sa3Code];
-    if (!st || !st.result) return;
-    const input = document.getElementById('region-read-draft-' + sa3Code);
-    if (!input) return;
-    const q = input.value.trim();
-    if (!q) return;
-    input.value = '';
-    const entry = { q, a: '', live: false, pending: true };
-    st.thread.push(entry);
-    renderRegionReadSection(sa3Code);
-    const result = await fetchLiveAnswer('region', q, st.result);
-    entry.a = result.text;
-    entry.live = result.ok;
-    entry.pending = false;
-    renderRegionReadSection(sa3Code);
+    Copilot.pushInstantAnswer(c.label, c.answer, { type: 'region', id: sa3Code, label: st.ctx?.p?.SA3Name || sa3Code });
 }
 
 function renderDrawerEmpty() {
@@ -5602,11 +5607,7 @@ function updateWeightUI() {
         }
     });
     document.getElementById('weights-reset').classList.toggle('hidden', isDefault);
-    // Plan Phase H — the co-pilot banner shares this same floating slot and
-    // takes precedence while active, so this banner stays suppressed rather
-    // than fighting it for the same space.
-    const copilotBannerActive = !document.getElementById('copilot-banner')?.classList.contains('hidden');
-    document.getElementById('weight-warning').classList.toggle('visible', !isDefault && !copilotBannerActive);
+    document.getElementById('weight-warning').classList.toggle('visible', !isDefault);
     // Custom thesis badge
     const badge = document.getElementById('thesis-badge');
     if (badge) badge.style.display = isDefault ? 'none' : '';
@@ -5692,8 +5693,8 @@ function applyWeights() {
 // ============================================================
 // Single source of truth for "what SA3s are currently in scope" — shared by
 // updateRailStats() below (which derives tier/avg/acquirable stats from it)
-// and the copilot's camera-fit tool call (plan Phase H, applyCopilotIntent()),
-// so the displayed region count and the camera's fitBounds target can never
+// and Copilot.executePlan()'s camera-fit logic (copilot-panel.js), so the
+// displayed region count and the camera's fitBounds target can never
 // silently disagree with each other.
 function computeFilteredSA3Features() {
     if (!State.sa3Data) return { all: [], afterGeo: [], final: [] };
@@ -6425,6 +6426,15 @@ function wireMarketSelector() {
     wireMapSubTabs();
 }
 
+// Programmatic Map/List/Targets switch -- there's no dedicated state for
+// this sub-tab (only DOM class state via wireMapSubTabs()'s click
+// handler), so the existing pattern for jumping here from code is simply
+// simulating the click. Used by Copilot.followLink('tab', ...) for
+// [[tab:targets|...]]-style deep-link tokens.
+function focusMapSubtab(subtab) {
+    document.querySelector(`.map-subtab[data-subtab="${subtab}"]`)?.click();
+}
+
 function wireMapSubTabs() {
     const tabs = document.querySelectorAll('.map-subtab');
     const panels = {
@@ -6636,11 +6646,11 @@ function wireUI() {
             html += `<div class="search-result-group-label">Clinic chains</div>`;
             chainMatches.forEach(k => {
                 const pal = CLINIC_CHAIN_PALETTE[k];
-                html += `<div class="search-result-item" onclick="searchActivateChain('${k}')">
+                html += `<div class="search-result-item" onclick="searchGotoChain('${k}')">
                     <span style="width:8px;height:8px;border-radius:50%;background:${pal.color || '#888'};flex-shrink:0;display:inline-block"></span>
                     <div>
                         <div class="search-result-name">${pal.name || k}</div>
-                        <div class="search-result-meta">Chain filter</div>
+                        <div class="search-result-meta">Targets chain dossier</div>
                     </div>
                 </div>`;
             });
@@ -6653,40 +6663,36 @@ function wireUI() {
         globalSearchInput.addEventListener('input', (e) => {
             const q = e.target.value.trim();
             runGlobalSearch(q);
-            updateSpotlightHint(q);
         });
         globalSearchInput.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none';
-                closeSpotlight();
             }
-            // Natural-language co-pilot (plan Phase H) — Enter did nothing on
-            // this input before; extends the existing ⌘K surface rather than
-            // adding a second "ask the AI" panel. Typing-as-you-go behavior
-            // above is completely untouched.
+            // Opens the assistant panel with this sentence as the first
+            // message — same entry point the old runCopilotQuery() used,
+            // now handled by Copilot.open() (copilot-panel.js). Typing-as-
+            // you-go behavior above is completely untouched.
             if (e.key === 'Enter' && globalSearchInput.value.trim()) {
                 e.preventDefault();
                 globalSearchResults.innerHTML = '';
                 globalSearchClear.style.display = 'none';
                 const q = globalSearchInput.value.trim();
                 globalSearchInput.value = '';
-                updateSpotlightHint('');
-                runCopilotQuery(q); // closes Spotlight itself once the whole run finishes — see closeSpotlight() call sites
+                Copilot.open(q);
             }
         });
         document.addEventListener('click', (e) => { if (!e.target.closest('.global-search-wrap')) globalSearchResults.innerHTML = ''; });
     }
     if (globalSearchClear) {
-        globalSearchClear.addEventListener('click', () => { globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none'; updateSpotlightHint(''); });
+        globalSearchClear.addEventListener('click', () => { globalSearchInput.value = ''; globalSearchResults.innerHTML = ''; globalSearchClear.style.display = 'none'; });
     }
-    // ⌘K shortcut (plan Phase H follow-up) — opens the Spotlight overlay
-    // rather than just focusing the input in place.
+    // ⌘K opens/focuses the assistant panel; Escape closes it if open.
     document.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
             e.preventDefault();
-            openSpotlight();
-        } else if (e.key === 'Escape' && document.body.classList.contains('spotlight-active')) {
-            closeSpotlight();
+            Copilot.toggle();
+        } else if (e.key === 'Escape' && document.body.classList.contains('copilot-panel-open')) {
+            Copilot.close();
         }
     });
 
@@ -7222,21 +7228,17 @@ function removeFilterChip(key) {
 }
 
 // ============================================================
-// Natural-language co-pilot (plan Phase H)
+// Assistant chat panel (src/js/components/copilot-panel.js)
 // ============================================================
-// One structured "intent" object (from api/copilot.js's generateObject call)
-// is applied here deterministically, in a FIXED safe order — the model
-// never touches live state directly, it only describes intent. Every step
-// below reuses an existing apply*()/set*() function; nothing here
-// reimplements filtering logic. See plan Phase H for the full rationale
-// (single structured intent vs. an agentic tool loop against the live map).
-
+// api/assistant.js's tool-calling loop returns a plan of discrete
+// {tool,args} steps; Copilot.executePlan() there applies them
+// deterministically, in a fixed safe order, reusing this app's existing
+// apply*()/set*() functions -- the model never touches live state
+// directly, it only proposes a plan. The lookups and helpers below are
+// used by that executor and by the plan-step description text in the
+// chat panel's UI.
 const COPILOT_MARKET_LABELS = { gp: 'General Practice', physio: 'Physiotherapy', dental: 'Dental' };
 const COPILOT_CATALOGUE_LABELS = { seifa: 'SEIFA IRSAD decile', workforce: 'workforce risk & DPA flags', gpBillings: 'GP billing mix' };
-const COPILOT_MAX_HISTORY = 6;
-let _copilotHistory = []; // session-only (no backend session store exists or is needed) — [{query, summary}], newest last
-
-function copilotSleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function copilotBbox(features) {
     if (!features || !features.length) return null;
@@ -7279,302 +7281,10 @@ function buildCopilotStateSummary() {
     };
 }
 
-function describeCopilotFilterSummary(intent) {
-    const parts = [];
-    if (intent.geography?.regionName) parts.push(intent.geography.regionName);
-    else if (intent.geography?.state) parts.push(intent.geography.state);
-    if (intent.groundFilters?.archetype?.ownership?.length) parts.push(intent.groundFilters.archetype.ownership.join('/'));
-    if (intent.groundFilters?.tier?.length) parts.push(`Tier ${intent.groundFilters.tier.slice().sort().join('–')}`);
-    if (intent.groundFilters?.lowDensity) parts.push('Low competitive density');
-    return parts.join(' · ');
-}
-
-// Builds the ordered, conditional list of checklist steps for this intent —
-// only steps whose action actually applies for THIS query appear (unlike a
-// fixed mock sequence). Each has a real async `run()`; the checklist UI
-// renders them queued → running → done as they're actually awaited below,
-// not a fake timer.
-function buildCopilotSteps(intent) {
-    const steps = [];
-    const isGP = () => State.markets.current === 'gp';
-
-    if (intent.scoringMarket && intent.scoringMarket !== State.markets.current) {
-        steps.push({
-            label: `Setting scoring market: ${COPILOT_MARKET_LABELS[intent.scoringMarket] || intent.scoringMarket}`,
-            tag: 'step 1', railStep: 'clinics',
-            run: async () => { await switchMarket(intent.scoringMarket); }
-        });
-    }
-    if (intent.clinicLayers) {
-        (intent.clinicLayers.add || []).forEach((layer) => {
-            if (!State.activeClinicLayers.includes(layer)) {
-                steps.push({
-                    label: `Adding ${COPILOT_MARKET_LABELS[layer] || layer} layer`, tag: 'step 1', railStep: 'clinics',
-                    run: async () => { await toggleClinicLayer(layer, true); }
-                });
-            }
-        });
-        (intent.clinicLayers.remove || []).forEach((layer) => {
-            if (State.activeClinicLayers.includes(layer) && layer !== State.markets.current) {
-                steps.push({
-                    label: `Removing ${COPILOT_MARKET_LABELS[layer] || layer} layer`, tag: 'step 1', railStep: 'clinics',
-                    run: async () => { await toggleClinicLayer(layer, false); }
-                });
-            }
-        });
-    }
-    const catalogueNeeded = (intent.catalogueLoads || []).filter((k) => {
-        if (State.catalogueLoaded[k]) return false;
-        if (k === 'gpBillings' && !isGP()) return false; // gpOnly — model should already reflect this in status:partial/skipped
-        return true;
-    });
-    if (catalogueNeeded.length) {
-        steps.push({
-            label: `Loading ${catalogueNeeded.map((k) => COPILOT_CATALOGUE_LABELS[k] || k).join(', ')} from data catalogue`,
-            tag: 'catalogue', railStep: 'ground',
-            run: async () => {
-                catalogueNeeded.forEach((k) => { catalogueStaged[k] = true; });
-                loadDataCatalogueSelections();
-            }
-        });
-    }
-    const g = intent.geography, gf = intent.groundFilters;
-    const filteringLabel = describeCopilotFilterSummary(intent);
-    if (filteringLabel) {
-        steps.push({
-            label: `Filtering: ${filteringLabel}`, tag: 'steps 2–3', railStep: null, // touches both, pulsed separately below
-            run: async () => {
-                if (g?.state && g.state !== State.currentState) {
-                    State.currentState = g.state;
-                    const sel = document.getElementById('state-filter');
-                    if (sel) sel.value = g.state;
-                }
-                if (g?.regionName) {
-                    const resolved = await resolveGazetteerRegion(g.regionName);
-                    if (resolved) State.regionFilter = resolved;
-                }
-                if (g?.remoteness?.length) {
-                    State.mmmFilter = g.remoteness;
-                    document.querySelectorAll('.mmm-chip').forEach((cb) => {
-                        const vals = cb.value.split(',').map(Number);
-                        cb.checked = vals.some((v) => g.remoteness.includes(v));
-                    });
-                }
-                if (gf?.tier?.length) State.tierFilter = gf.tier;
-                if (gf?.seifaDeciles?.length) {
-                    State.seifaDeciles = gf.seifaDeciles;
-                    State.catalogueFilterActive.seifa = true;
-                    document.querySelectorAll('.seifa-chip').forEach((cb) => { cb.checked = gf.seifaDeciles.includes(parseInt(cb.value, 10)); });
-                }
-                if (gf?.workforceRiskMin != null) {
-                    State.workforceRiskMin = gf.workforceRiskMin;
-                    const slider = document.getElementById('workforce-risk-slider');
-                    if (slider) slider.value = gf.workforceRiskMin;
-                    const readout = document.getElementById('workforce-risk-readout');
-                    if (readout) readout.textContent = gf.workforceRiskMin;
-                }
-                if (gf?.dpaBonded != null) {
-                    State.dpaFilter.bonded = gf.dpaBonded;
-                    const el = document.getElementById('dpa-bonded'); if (el) el.checked = gf.dpaBonded;
-                }
-                if (gf?.dpaGpImg != null) {
-                    State.dpaFilter.gpImg = gf.dpaGpImg;
-                    const el = document.getElementById('dpa-gp-img'); if (el) el.checked = gf.dpaGpImg;
-                }
-                if (gf?.archetype) {
-                    ['format', 'billing', 'ownership'].forEach((dim) => {
-                        const vals = gf.archetype[dim];
-                        if (vals && vals.length) {
-                            State.archetypeFilter[dim] = vals;
-                            document.querySelectorAll(`.archetype-chip[data-dim="${dim}"]`).forEach((cb) => { cb.checked = vals.includes(cb.value); });
-                        }
-                    });
-                    applyArchetypeFilter();
-                }
-                if (gf?.lowDensity) State.supplyScoreMin = resolveLowDensityThreshold(50);
-                applyWorkforceFilters();
-                applySeifaFilter();
-            }
-        });
-    }
-    if (intent.colourBy && intent.colourBy !== State.currentMapView) {
-        steps.push({
-            label: `Colouring by ${intent.colourBy}`, tag: 'colour', railStep: 'thesis',
-            run: async () => { setMapView(intent.colourBy); saveLensState(intent.colourBy); }
-        });
-    }
-    return steps;
-}
-
-// Spotlight ⌘K overlay (plan Phase H follow-up) — the existing header
-// search bar elevates in place into a centered, enlarged overlay via this
-// state class (see styles.css); no separate cloned input, no second
-// surface, same ids/wiring throughout. Stays open through the checklist so
-// the "show your work" steps read as a focused moment, and closes itself
-// once runCopilotQuery()/applyCopilotIntent() actually finish (success,
-// decline, or network failure) or a search result gets picked.
-function openSpotlight() {
-    document.body.classList.add('spotlight-active');
-    document.getElementById('spotlight-backdrop')?.classList.remove('hidden');
-    const input = document.getElementById('global-search-input');
-    input?.focus();
-    updateSpotlightHint(input?.value.trim() || '');
-}
-function closeSpotlight() {
-    document.body.classList.remove('spotlight-active');
-    document.getElementById('spotlight-backdrop')?.classList.add('hidden');
-    document.getElementById('global-search-input')?.blur();
-}
-function updateSpotlightHint(query) {
-    document.getElementById('spotlight-hint')?.classList.toggle('visible', !query);
-}
-
-// The one entry point wired to Enter on #global-search-input (plan Phase H).
-async function runCopilotQuery(query) {
-    const trimmed = (query || '').trim();
-    if (!trimmed) return;
-
-    renderCopilotChecklist([{ label: 'Thinking through your request', tag: 'plan', status: 'running' }]);
-    showCopilotChecklist(true);
-
-    let data;
-    try {
-        const res = await fetch('/api/copilot', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                query: trimmed,
-                currentState: buildCopilotStateSummary(),
-                history: _copilotHistory.slice(-COPILOT_MAX_HISTORY)
-            })
-        });
-        data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.intent) {
-            showCopilotChecklist(false);
-            renderCopilotBanner({ status: 'declined', declineReason: data.error || "Couldn't reach the co-pilot just now — try again." });
-            closeSpotlight();
-            return;
-        }
-    } catch {
-        showCopilotChecklist(false);
-        renderCopilotBanner({ status: 'declined', declineReason: "Couldn't reach the co-pilot just now — try again." });
-        closeSpotlight();
-        return;
-    }
-
-    await applyCopilotIntent(data.intent, trimmed);
-}
-
-async function applyCopilotIntent(intent, originalQuery) {
-    const beforeFeatures = computeFilteredSA3Features().final;
-    const beforeBbox = copilotBbox(beforeFeatures);
-    const beforeCount = beforeFeatures.length;
-    const steps = buildCopilotSteps(intent);
-    const pulseSteps = new Set(steps.map((s) => s.railStep).filter(Boolean));
-    if (steps.some((s) => s.tag === 'steps 2–3')) { pulseSteps.add('geo'); pulseSteps.add('ground'); }
-
-    const display = steps.map((s) => ({ label: s.label, tag: s.tag, status: 'queued' }));
-    renderCopilotChecklist(display);
-
-    for (let i = 0; i < steps.length; i++) {
-        display[i].status = 'running';
-        renderCopilotChecklist(display);
-        await steps[i].run();
-        display[i].status = 'done';
-        renderCopilotChecklist(display);
-        await copilotSleep(180); // pacing only, for legibility — every line above is real completed work, not a timer standing in for it
-    }
-
-    updateRailStats();
-    updateFilterChips();
-    renderFunnelSummaries();
-
-    // Camera — resolved AFTER every filter has actually applied, fitted to
-    // the real matched geometry (never the gazetteer's static region bbox),
-    // and only re-flown if the view genuinely needs to move.
-    let cameraHeld = false;
-    if (intent.focus?.name) {
-        display.push({ label: `Opening ${intent.focus.name}`, tag: 'map', status: 'running' });
-        renderCopilotChecklist(display);
-        if (intent.focus.type === 'region') {
-            const match = State.sa3Data?.features.find((f) => (f.properties.SA3Name || '').toLowerCase() === intent.focus.name.toLowerCase());
-            if (match) selectSA3(match.properties.SA3Code);
-        } else if (intent.focus.type === 'clinic') {
-            const match = State.clinicsData.find((c) => (c.clinic_name || '').toLowerCase() === intent.focus.name.toLowerCase());
-            if (match) selectClinic(match);
-        }
-        display[display.length - 1].status = 'done';
-        renderCopilotChecklist(display);
-    } else {
-        const afterFeatures = computeFilteredSA3Features().final;
-        const afterBbox = copilotBbox(afterFeatures);
-        if (afterBbox && copilotBboxChangedMeaningfully(beforeBbox, afterBbox)) {
-            display.push({ label: `Fitting camera to ${afterFeatures.length} matched region${afterFeatures.length === 1 ? '' : 's'}`, tag: 'map', status: 'running' });
-            renderCopilotChecklist(display);
-            map.fitBounds(afterBbox, { padding: 60, duration: 800, maxZoom: 10 });
-            display[display.length - 1].status = 'done';
-            renderCopilotChecklist(display);
-        } else {
-            cameraHeld = true;
-        }
-    }
-
-    pulseRailSteps([...pulseSteps]);
-    await copilotSleep(300);
-    showCopilotChecklist(false);
-
-    const afterCount = computeFilteredSA3Features().final.length;
-    _copilotHistory.push({ query: originalQuery, summary: intent.summary, beforeCount, afterCount, time: copilotTimeLabel() });
-    if (_copilotHistory.length > COPILOT_MAX_HISTORY) _copilotHistory.shift();
-
-    renderCopilotBanner(intent, cameraHeld);
-    closeSpotlight();
-}
-
-function copilotTimeLabel() {
-    return new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
-function copilotResetApplied() {
-    State.regionFilter = null;
-    State.tierFilter = [];
-    State.supplyScoreMin = null;
-    applyWorkforceFilters();
-    updateRailStats();
-    updateFilterChips();
-    _copilotHistory = [];
-    hideCopilotBanner();
-}
-
-function showCopilotChecklist(show) {
-    document.getElementById('copilot-checklist')?.classList.toggle('hidden', !show);
-}
-
-function renderCopilotChecklist(steps) {
-    const body = document.getElementById('copilot-checklist-body');
-    const title = document.getElementById('copilot-checklist-title');
-    if (!body) return;
-    const doneCount = steps.filter((s) => s.status === 'done').length;
-    if (title) {
-        title.textContent = (steps.length && doneCount === steps.length)
-            ? `Done · ${steps.length} action${steps.length === 1 ? '' : 's'}`
-            : `Working · ${doneCount} of ${steps.length}`;
-    }
-    body.innerHTML = steps.map((s) => {
-        const icon = s.status === 'done' ? '✓' : (s.status === 'running' ? '▶' : '·');
-        return `
-            <div class="copilot-step ${s.status}">
-                <span class="copilot-step-icon ${s.status}">${icon}</span>
-                <span class="copilot-step-label">${s.label}</span>
-                <span class="copilot-step-tag">${s.tag}</span>
-            </div>
-        `;
-    }).join('');
-}
-
-// Briefly highlights which of the 4 funnel steps the intent actually
-// touched (plan Phase H) — restarts the animation cleanly even if a
-// previous pulse is still fading, via the forced-reflow trick.
+// Briefly highlights which of the 4 funnel steps a Copilot plan step
+// actually touched — restarts the animation cleanly even if a previous
+// pulse is still fading, via the forced-reflow trick. Called from
+// Copilot.executePlan() in copilot-panel.js.
 function pulseRailSteps(railStepIds) {
     railStepIds.forEach((id) => {
         const el = document.getElementById('acc-' + id);
@@ -7584,80 +7294,6 @@ function pulseRailSteps(railStepIds) {
         el.classList.add('copilot-pulse');
         setTimeout(() => el.classList.remove('copilot-pulse'), 3300);
     });
-}
-
-let _copilotLogOpen = true;
-
-function copilotToggleLog() {
-    _copilotLogOpen = !_copilotLogOpen;
-    renderCopilotBanner(_copilotLastIntent, _copilotLastCameraHeld);
-}
-
-let _copilotLastIntent = null;
-let _copilotLastCameraHeld = false;
-
-function hideCopilotBanner() {
-    document.getElementById('copilot-banner')?.classList.add('hidden');
-    document.getElementById('weight-warning') && updateWeightUI();
-}
-
-// Renders the one banner slot for every co-pilot outcome — applied,
-// partial, declined — plus the camera-held indicator and the expandable
-// multi-turn log. Same visual register throughout (plan Phase H): no
-// toast, no red, matching .weight-warning's existing amber "differs from
-// base case" treatment. Only one of .weight-warning/#copilot-banner shows
-// at a time — the co-pilot banner takes precedence while active since it's
-// the more specific, more recent state change.
-function renderCopilotBanner(intent, cameraHeld) {
-    _copilotLastIntent = intent;
-    _copilotLastCameraHeld = cameraHeld;
-    const el = document.getElementById('copilot-banner');
-    if (!el || !intent) return;
-
-    document.getElementById('weight-warning')?.classList.remove('visible');
-
-    if (intent.status === 'declined') {
-        el.className = 'copilot-banner declined';
-        el.innerHTML = `
-            <div class="copilot-banner-row">
-                <span class="copilot-banner-badge neutral">Out of scope</span>
-                <div class="copilot-banner-text">${intent.declineReason || "Can't do that yet."}</div>
-            </div>
-        `;
-        return;
-    }
-
-    const badgeLabel = intent.status === 'partial' ? 'Partial' : 'Copilot applied';
-    const skippedNote = (intent.status === 'partial' && intent.skipped?.length)
-        ? `<span class="copilot-banner-sub"> — skipped: ${intent.skipped.join('; ')}</span>` : '';
-    const latest = _copilotHistory[_copilotHistory.length - 1];
-    const scopeNote = latest ? `<span class="copilot-banner-sub"> — ${latest.afterCount} region${latest.afterCount === 1 ? '' : 's'} in view</span>` : '';
-
-    const logRows = _copilotHistory.slice().reverse().map((h) => `
-        <div class="copilot-banner-log-row">
-            <span class="copilot-banner-log-delta" style="color:var(--muted)">${h.time}</span>
-            <div class="copilot-banner-log-query">“${h.query}”</div>
-            <span class="copilot-banner-log-delta">${h.beforeCount} → ${h.afterCount}</span>
-        </div>
-    `).join('');
-
-    el.className = 'copilot-banner';
-    el.innerHTML = `
-        <div class="copilot-banner-row">
-            <span class="copilot-banner-badge">${badgeLabel}</span>
-            <div class="copilot-banner-text">${intent.summary || ''}${skippedNote}${scopeNote}</div>
-            <button class="copilot-banner-btn" onclick="copilotResetApplied()">Reset</button>
-            ${_copilotHistory.length > 1 ? `<button class="copilot-banner-toggle" onclick="copilotToggleLog()">${_copilotLogOpen ? '▴' : '▾'} ${_copilotHistory.length} turns</button>` : ''}
-        </div>
-        ${(_copilotLogOpen && _copilotHistory.length > 1) ? `<div class="copilot-banner-log">${logRows}</div>` : ''}
-        ${cameraHeld ? `
-            <div class="copilot-camera-held">
-                <span class="copilot-camera-held-badge">Camera held</span>
-                <span>Same regions in frame — refiltering inside the current view doesn't move the map.</span>
-            </div>
-        ` : ''}
-    `;
-    el.classList.remove('hidden');
 }
 
 // ============================================================
@@ -7781,7 +7417,6 @@ function deactivatePreset() {
 function searchGotoSA3(sa3Code) {
     document.getElementById('global-search-results').innerHTML = '';
     document.getElementById('global-search-input').value = '';
-    closeSpotlight();
     const feature = State.sa3Data?.features.find(f => f.properties.SA3Code === sa3Code);
     if (feature && map) {
         const bbox = turf.bbox(feature);
@@ -7793,7 +7428,6 @@ function searchGotoSA3(sa3Code) {
 function searchGotoClinic(clinicId) {
     document.getElementById('global-search-results').innerHTML = '';
     document.getElementById('global-search-input').value = '';
-    closeSpotlight();
     const clinic = State.clinicsData.find(c => String(c.clinic_id) === String(clinicId));
     if (clinic && map) {
         map.flyTo({ center: [parseFloat(clinic.longitude), parseFloat(clinic.latitude)], zoom: 13, duration: 600 });
@@ -7803,15 +7437,15 @@ function searchGotoClinic(clinicId) {
     }
 }
 
-function searchActivateChain(chainName) {
+// Replaces searchActivateChain() -- that function's target,
+// .clinic-chain-checkbox, no longer exists (the Major Chains section was
+// removed from Step 1 earlier this session; chain-level detail now lives
+// in the Targets chain dossier instead). Both the global search dropdown's
+// chain result rows and Copilot.followLink('chain', ...) call this.
+function searchGotoChain(chainName) {
     document.getElementById('global-search-results').innerHTML = '';
     document.getElementById('global-search-input').value = '';
-    closeSpotlight();
-    if (!State.clinicChainFilter.includes(chainName)) {
-        State.clinicChainFilter.push(chainName);
-        const checkbox = document.querySelector(`.clinic-chain-checkbox[data-chain="${chainName}"]`);
-        if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change', { bubbles: true })); }
-    }
+    if (typeof TP !== 'undefined') TP.focusChainRow(chainName);
 }
 
 function openDrawerForSA3(sa3Code) {
@@ -7838,7 +7472,7 @@ window.applyPreset = applyPreset;
 window.removeFilterChip = removeFilterChip;
 window.searchGotoSA3 = searchGotoSA3;
 window.searchGotoClinic = searchGotoClinic;
-window.searchActivateChain = searchActivateChain;
+window.searchGotoChain = searchGotoChain;
 
 // ============================================================
 // Auth UI Wiring
@@ -8770,18 +8404,7 @@ function buildAcquisitionReadHTML(clinicId) {
                     <div class="rd-chips">
                         ${read.chips.map((c, i) => `<button class="rd-chip" onclick="acqReadAskChip('${idAttr}', ${i})">${c.label}</button>`).join('')}
                     </div>
-                    ${st.thread.map(t => `
-                        <div class="rd-thread-item rd-fadein">
-                            <div class="rd-thread-q">${t.q}</div>
-                            <div class="rd-thread-a">${t.pending ? '<span class="rd-blink-dot"></span> Thinking…' : t.a}</div>
-                            ${t.live && !t.pending ? '<div class="rd-live-tag">Model-generated — verify independently</div>' : ''}
-                        </div>
-                    `).join('')}
-                    <div class="rd-followup-row">
-                        <input class="rd-followup-input" id="acq-read-draft-${idAttr}" placeholder="Ask a follow-up about this clinic…" onkeydown="if(event.key==='Enter') acqReadAskFreeform('${idAttr}')" />
-                        <button class="rd-followup-send" onclick="acqReadAskFreeform('${idAttr}')">↩</button>
-                    </div>
-                    <div class="rd-followup-note">Scored dimensions above are computed, not model-generated. Suggested questions reuse that computation instantly; free-form questions call a live model scoped to this clinic only, with no memory between clinics.</div>
+                    <div class="rd-ask-redirect">Ask a follow-up about this clinic in <button class="rd-link-btn" onclick="Copilot.openForCurrentContext()">Ask Foundry →</button></div>
                 </div>
             </div>
         `;
@@ -8809,7 +8432,6 @@ function acqReadGenerate(clinicId) {
     clearTimeout(st._timer);
     st.phase = 'loading';
     st.collapsed = false;
-    st.thread = [];
     renderAcqReadSection(clinicId);
     st._timer = setTimeout(() => {
         const ctx = st.ctx;
@@ -8827,31 +8449,15 @@ function acqReadToggleCollapse(clinicId) {
     renderAcqReadSection(clinicId);
 }
 
+// Pushes this canned Q+A into the global assistant panel instead of a
+// local thread scoped to this drawer -- see regionReadAskChip()'s matching
+// comment.
 function acqReadAskChip(clinicId, idx) {
     const st = State.acquisitionReads[clinicId];
     if (!st || !st.result) return;
     const c = st.result.chips[idx];
     if (!c) return;
-    st.thread.push({ q: c.label, a: c.answer });
-    renderAcqReadSection(clinicId);
-}
-
-async function acqReadAskFreeform(clinicId) {
-    const st = State.acquisitionReads[clinicId];
-    if (!st || !st.result) return;
-    const input = document.getElementById('acq-read-draft-' + clinicId);
-    if (!input) return;
-    const q = input.value.trim();
-    if (!q) return;
-    input.value = '';
-    const entry = { q, a: '', live: false, pending: true };
-    st.thread.push(entry);
-    renderAcqReadSection(clinicId);
-    const result = await fetchLiveAnswer('clinic', q, st.result);
-    entry.a = result.text;
-    entry.live = result.ok;
-    entry.pending = false;
-    renderAcqReadSection(clinicId);
+    Copilot.pushInstantAnswer(c.label, c.answer, { type: 'clinic', id: clinicId, label: st.ctx?.clinic?.clinic_name || st.ctx?.clinic?.name || 'this clinic' });
 }
 
 // ============================================================
@@ -9094,7 +8700,7 @@ function renderSingleClinicRail() {
     // Acquisition read — refresh the compute context each render, preserve
     // phase/collapsed/thread across clinic re-selection (see plan Phase 5).
     if (!State.acquisitionReads[clinic.clinic_id]) {
-        State.acquisitionReads[clinic.clinic_id] = { phase: 'idle', collapsed: false, thread: [] };
+        State.acquisitionReads[clinic.clinic_id] = { phase: 'idle', collapsed: false };
     }
     State.acquisitionReads[clinic.clinic_id].ctx = {
         clinic, archetype, tierInfo, analytics, clinicsPerKm, nationalAvgDensity,

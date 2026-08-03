@@ -697,6 +697,35 @@ const TP = {
     this.renderChainDossier();
   },
 
+  // Switches to the Targets subtab, ensures the named chain is actually
+  // visible (clears any active category filter that might hide it, and
+  // tries every active clinic layer if it's not in the currently-selected
+  // one), then scrolls/flashes its row -- used by
+  // Copilot.followLink('chain', ...) for [[chain:ChainName|...]]-style
+  // deep-link tokens (see copilot-panel.js; this replaces the old,
+  // already-dead searchActivateChain() as the real target for chain
+  // navigation).
+  focusChainRow(chainName) {
+    if (typeof focusMapSubtab === 'function') focusMapSubtab('targets');
+    this.CHAIN_DOSSIER.filter = 'all';
+
+    const layers = (typeof State !== 'undefined' && State.activeClinicLayers?.length) ? State.activeClinicLayers : [this.CHAIN_DOSSIER.layer];
+    const tryLayers = [this.CHAIN_DOSSIER.layer, ...layers.filter((l) => l !== this.CHAIN_DOSSIER.layer)];
+    const layerWithChain = tryLayers.find((layer) => this.buildChainDossier(layer).some((r) => r.name === chainName));
+    if (layerWithChain && layerWithChain !== this.CHAIN_DOSSIER.layer) {
+      this.CHAIN_DOSSIER.layer = layerWithChain;
+    }
+    this.renderChainDossier();
+
+    setTimeout(() => {
+      const row = document.querySelector(`#td-tbody tr[data-chain="${chainName.replace(/"/g, '&quot;')}"]`);
+      if (!row) return; // chain genuinely isn't in any active layer's dossier -- nothing to flash
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.classList.add('td-row-flash');
+      setTimeout(() => row.classList.remove('td-row-flash'), 1600);
+    }, 400); // matches the existing "click subtab, act after a timeout" precedent elsewhere in this file
+  },
+
   renderChainDossier() {
     if (typeof State === 'undefined' || !State.markets) return;
     if (!State.activeClinicLayers.includes(this.CHAIN_DOSSIER.layer)) {
@@ -738,7 +767,7 @@ const TP = {
     const tbody = document.getElementById('td-tbody');
     if (tbody) {
       tbody.innerHTML = filtered.length ? filtered.map((r) => `
-        <tr>
+        <tr data-chain="${String(r.name).replace(/"/g, '&quot;')}">
             <td class="td-chain-name">${r.name}</td>
             <td><span class="td-badge td-badge-${r.category}">${this.CATEGORY_LABELS[r.category]}</span></td>
             <td>${r.sites}</td>

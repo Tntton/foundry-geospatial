@@ -2,5 +2,8 @@
   "rewrites": [
     { "source": "/", "destination": "/src/map.html" },
     { "source": "/:path*", "destination": "/src/:path*" }
-  ]
+  ],
+  "functions": {
+    "api/assistant.js": { "maxDuration": 60 }
+  }
 }

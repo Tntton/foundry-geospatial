@@ -18,7 +18,7 @@
     <!-- Supabase Auth -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=mob24" />
+    <link rel="stylesheet" href="css/styles.css?v=mob26" />
     <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
     <style>
         /* Hide login buttons */
@@ -127,17 +127,6 @@
 
 <div class="app">
 
-    <!-- Spotlight backdrop (⌘K) — dims the app while the search bar below
-         is elevated into a centered, enlarged overlay via body.spotlight-active.
-         Click to dismiss, same as clicking outside a modal. -->
-    <div class="spotlight-backdrop hidden" id="spotlight-backdrop" onclick="closeSpotlight()"></div>
-    <!-- ESC-to-close hint (plan Phase H follow-up) — a true top-level
-         sibling of the backdrop, not nested under .global-search-wrap:
-         that element gets a CSS transform in Spotlight mode, which would
-         make position:fixed here resolve relative to IT instead of the
-         real viewport. -->
-    <kbd class="spotlight-esc-hint" id="spotlight-esc-hint" onclick="closeSpotlight()">ESC</kbd>
-
     <!-- ============================================================
          Header
          ============================================================ -->
@@ -169,42 +158,26 @@
         <div style="flex:1;"></div>
 
         <div class="actions">
-            <!-- Global search — relocated from the rail's sticky header to
-                 the top-right of the app header (plan Phase G). Same ids/JS
-                 wiring, just moved. -->
+            <!-- Global search — pure keyword search (SA3/clinic/chain
+                 type-ahead), no longer doubles as the AI entry point. The
+                 assistant panel gets its own separate trigger button right
+                 after it (cop-trigger-btn) rather than living inside the
+                 search box. -->
             <div class="global-search-wrap" id="global-search-wrap">
-                <div class="global-search" onclick="openSpotlight()">
+                <div class="global-search">
                     <svg class="global-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none">
                         <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
                         <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                     </svg>
-                    <input type="text" id="global-search-input" class="global-search-input" placeholder="Search, or ask a question…" autocomplete="off" />
-                    <span class="global-search-ai-badge" title="Press ⌘K to search or ask the co-pilot a question">✦ Ask AI <kbd>⌘K</kbd></span>
+                    <input type="text" id="global-search-input" class="global-search-input" placeholder="Search SA3, clinic, chain…" autocomplete="off" />
                     <button id="global-search-clear" class="global-search-clear" style="display:none">✕</button>
-                </div>
-                <!-- Co-pilot discoverability hint (plan Phase H follow-up) —
-                     only shown in Spotlight mode with an empty input, so it
-                     doesn't compete with the compact header search box. -->
-                <div class="spotlight-hint" id="spotlight-hint">
-                    Search a region, clinic or chain — or ask a question, e.g. <em>"tier 1 and 2 GP regions in South-East Queensland with independent ownership"</em>
                 </div>
                 <div class="global-search-results" id="global-search-results"></div>
                 <!-- Legacy clinic search state hooks (hidden) -->
                 <div id="clinic-search-results" style="display:none"><div id="clinic-search-results-list"></div></div>
                 <div id="clinic-search-status" style="display:none"></div>
-                <!-- Natural-language co-pilot live checklist (plan Phase H) —
-                     anchored at the same spot #global-search-results uses,
-                     extending the existing ⌘K surface rather than floating a
-                     new panel over the map. Shows real steps as they're
-                     actually awaited by applyCopilotIntent() in app.js, not
-                     a fake timer. -->
-                <div class="copilot-checklist hidden" id="copilot-checklist">
-                    <div class="copilot-checklist-hdr">
-                        <span id="copilot-checklist-title">Working</span>
-                    </div>
-                    <div class="copilot-checklist-body" id="copilot-checklist-body"></div>
-                </div>
             </div>
+            <button class="cop-trigger-btn" onclick="Copilot.open()" title="Ask the assistant a question (⌘K)">✦ Ask AI <kbd>⌘K</kbd></button>
             <span class="action-meta">Data vintage · Mar 2025</span>
             <a class="nav-btn" href="#" onclick="window.location.href='methodology.html?market='+(window.State?.markets?.current||'gp'); return false;" style="text-decoration:none; color:inherit; cursor:pointer; display:flex; align-items:center;">Methodology</a>
             <button id="login-btn" class="nav-btn login">Login</button>
@@ -233,7 +206,7 @@
         <button class="mob-lens-chip lens-seg" data-lens="workforce">Workforce</button>
         <span id="mob-catalogue-lens-chips"></span>
         <button class="mob-lens-chip mob-lens-nra" id="mob-lens-nra-btn">GP Billings <span class="mob-lens-arrow">▾</span></button>
-        <button class="mob-search-btn" id="mob-search-btn" aria-label="Search or ask a question" onclick="openSpotlight()">
+        <button class="mob-search-btn" id="mob-search-btn" aria-label="Search or ask a question" onclick="Copilot.open()">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
                 <path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
@@ -893,20 +866,33 @@
                     Custom weighting active — results differ from base case
                 </div>
 
-                <!-- Co-pilot state banner (plan Phase H) — same floating
-                     slot/position/colour language as .weight-warning above
-                     ("state differs from base case"), extended with the
-                     richer content the co-pilot needs (Reset, expandable
-                     multi-turn log, decline/partial states). Only one of
-                     the two banners is ever shown at once — see
-                     renderCopilotBanner()/hideCopilotBanner() in app.js. -->
-                <div class="copilot-banner hidden" id="copilot-banner"></div>
-
                 <div class="map-tooltip" id="map-tooltip"></div>
 
                 <!-- Detail drawer -->
                 <aside class="detail-drawer" id="detail-drawer">
                     <div id="drawer-body"></div>
+                </aside>
+
+                <!-- Assistant chat panel — persistent, dockable, replaces the
+                     old ⌘K Spotlight overlay/checklist/banner cluster. Opens
+                     via the header search box or ⌘K (see Copilot.open()/
+                     .toggle() in copilot-panel.js). When open, .detail-drawer
+                     shifts left via body.copilot-panel-open rather than being
+                     covered (see styles.css). -->
+                <aside class="cop-panel" id="copilot-panel">
+                    <div class="cop-panel-hdr">
+                        <span class="cop-panel-title">Ask Foundry</span>
+                        <button class="cop-panel-new" id="copilot-new-btn" title="New conversation" onclick="Copilot.newConversation()">＋</button>
+                        <button class="cop-panel-close" id="copilot-close-btn" title="Close" onclick="Copilot.close()">✕</button>
+                    </div>
+                    <div class="cop-panel-body" id="copilot-messages"></div>
+                    <div class="cop-panel-reset-row hidden" id="copilot-reset-row">
+                        <button class="cop-panel-reset-btn" onclick="Copilot.resetAppliedState()">Reset applied changes</button>
+                    </div>
+                    <div class="cop-panel-composer">
+                        <textarea id="copilot-input" class="cop-input" rows="1" placeholder="Ask a question, or tell it what to change…" onkeydown="Copilot.handleComposerKeydown(event)"></textarea>
+                        <button class="cop-send-btn" id="copilot-send-btn" onclick="Copilot.send()">↩</button>
+                    </div>
                 </aside>
 
                 <!-- Target Overview drawer (F-02) -->
@@ -2007,9 +1993,10 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr35"></script>
+<script src="js/app.js?v=rr36"></script>
 <script src="js/components/targets-tab.js?v=rr7"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
+<script src="js/components/copilot-panel.js?v=1"></script>
 
 <script>
 // Initialize left rail UI on page load
