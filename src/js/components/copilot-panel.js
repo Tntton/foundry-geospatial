@@ -15,9 +15,21 @@
 // State/TP pattern), so no window.* export is needed here either.
 //
 // Backend contract (api/assistant.js): POST { messages: [{role,text}],
-// currentState } -> { answer: '<safe html, deep-link tokens already
-// resolved to onclick="Copilot.followLink(...)" buttons>', plan: null |
-// { status: 'applied'|'partial', steps: [{tool,args}], skipped: [] } }.
+// currentState } -> a 200 response streamed as NDJSON (one JSON object per
+// '\n'-terminated line, Content-Type: application/x-ndjson), not a single
+// JSON body -- lets the pending message bubble show live progress
+// ("Querying regions…", "Writing answer…") instead of a static "Thinking…"
+// for the whole multi-step tool loop. Line shapes:
+//   {type:'status', label}                          -- zero or more
+//   {type:'done', answer: '<safe html, deep-link      -- exactly one, iff
+//     tokens resolved to onclick="Copilot.followLink   no error line was
+//     (...)" buttons>', plan: null | {status, steps,   sent
+//     skipped}}
+//   {type:'error', message}                          -- exactly one, iff
+//                                                        no done line was
+//                                                        sent
+// Non-2xx responses (rate limit, validation errors) are still a single
+// plain JSON body ({error}), never a stream -- only the happy path streams.
 // `plan` mirrors the old copilot.js intent's applied/partial vocabulary,
 // just derived from real per-tool-call validation outcomes instead of a
 // self-reported status field, and always executed client-side via the
@@ -160,6 +172,8 @@ Copilot.send = async function (prefilledText) {
     const sendBtn = document.getElementById('copilot-send-btn');
     if (sendBtn) sendBtn.disabled = true;
 
+    const msg = Copilot.messages.find((m) => m.id === pendingId);
+
     try {
         const res = await fetch('/api/assistant', {
             method: 'POST',
@@ -169,28 +183,70 @@ Copilot.send = async function (prefilledText) {
                 currentState: copilotBuildStateSummary()
             })
         });
-        const data = await res.json().catch(() => ({}));
-        const msg = Copilot.messages.find((m) => m.id === pendingId);
         if (!msg) return;
 
-        if (!res.ok || !data.answer) {
+        if (!res.ok || !res.body) {
+            // Non-2xx (rate limit, validation, missing credentials) is
+            // still a single plain JSON body -- only the happy path
+            // streams (see the contract comment above Copilot's own
+            // declaration).
+            const data = await res.json().catch(() => ({}));
             msg.text = `<p>${copilotEscapeHtml(data.error || "Couldn't reach the assistant just now — try again.")}</p>`;
             msg.pending = false;
             Copilot.renderMessages();
             return;
         }
 
-        msg.text = data.answer;
-        msg.pending = false;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let settled = false;
 
-        if (data.plan) {
-            const { cameraHeld } = await Copilot.executePlan(data.plan);
-            msg.plan = { ...data.plan, cameraHeld };
-            document.getElementById('copilot-reset-row')?.classList.remove('hidden');
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop(); // last entry may be a partial line -- keep it for the next chunk
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                let evt;
+                try { evt = JSON.parse(line); } catch { continue; } // never let one bad line kill the read loop
+
+                if (evt.type === 'status') {
+                    msg.statusLabel = evt.label;
+                    Copilot.renderMessages();
+                } else if (evt.type === 'done') {
+                    msg.text = evt.answer;
+                    msg.pending = false;
+                    settled = true;
+                    if (evt.plan) {
+                        const { cameraHeld } = await Copilot.executePlan(evt.plan);
+                        msg.plan = { ...evt.plan, cameraHeld };
+                        document.getElementById('copilot-reset-row')?.classList.remove('hidden');
+                    }
+                    Copilot.renderMessages();
+                } else if (evt.type === 'error') {
+                    msg.text = `<p>${copilotEscapeHtml(evt.message || "Couldn't reach the assistant just now — try again.")}</p>`;
+                    msg.pending = false;
+                    settled = true;
+                    Copilot.renderMessages();
+                }
+            }
         }
-        Copilot.renderMessages();
+
+        if (!settled) {
+            // The stream ended (connection closed) without ever sending a
+            // done/error line -- e.g. the server crashed after headers were
+            // already flushed, so it could no longer fall back to an HTTP
+            // error status. Same fallback message as the non-streaming
+            // error paths above.
+            msg.text = `<p>${copilotEscapeHtml("Couldn't reach the assistant just now — try again.")}</p>`;
+            msg.pending = false;
+            Copilot.renderMessages();
+        }
     } catch (e) {
-        const msg = Copilot.messages.find((m) => m.id === pendingId);
         if (msg) {
             msg.text = `<p>${copilotEscapeHtml("Couldn't reach the assistant just now — try again.")}</p>`;
             msg.pending = false;
@@ -458,7 +514,8 @@ function copilotRenderOneMessage(m) {
         return `<div class="cop-msg cop-msg-user">${pill}<div class="cop-msg-bubble">${copilotEscapeHtml(m.text)}</div></div>`;
     }
     if (m.pending) {
-        return `<div class="cop-msg cop-msg-assistant"><div class="cop-msg-thinking"><span class="rd-blink-dot"></span> Thinking…</div></div>`;
+        const label = copilotEscapeHtml(m.statusLabel || 'Thinking…');
+        return `<div class="cop-msg cop-msg-assistant"><div class="cop-msg-thinking"><span class="rd-blink-dot"></span> ${label}</div></div>`;
     }
     const planHtml = m.plan ? copilotRenderPlanCard(m.plan) : '';
     const metaHtml = m.instant ? '<div class="cop-msg-meta">Computed, not model-generated</div>' : '';

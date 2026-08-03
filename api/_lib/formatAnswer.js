@@ -60,10 +60,22 @@ function linkifyTokens(html, grounded) {
     });
 }
 
+// GFM-style table: a "| a | b |" row immediately followed by a
+// "|---|---|" separator row. Only recognized with that exact two-line
+// signature present, so a line that merely contains a stray '|' (and has
+// no separator row right after it) safely falls through to a normal
+// paragraph instead of misfiring as a table.
+const TABLE_ROW_RE = /^\|(.+)\|$/;
+const TABLE_SEP_RE = /^\|[\s:|-]+\|$/;
+
+function parseTableRow(line) {
+    return line.slice(1, -1).split('|').map((c) => c.trim());
+}
+
 // Same constrained-markdown-to-HTML conversion as the old ask-read.js
-// (bold via **, bullets via "- "/"1. ", paragraphs via blank lines) — moved
-// here verbatim so both the assistant's tool-loop answer and any future
-// caller share one implementation.
+// (bold via **, bullets via "- "/"1. ", paragraphs via blank lines, tables
+// via "| a | b |") — moved here verbatim so both the assistant's tool-loop
+// answer and any future caller share one implementation.
 export function formatAnswerHtml(text, grounded) {
     let t = escapeHtml(text);
     t = t.replace(/^#{1,6}\s+/gm, '');
@@ -80,11 +92,32 @@ export function formatAnswerHtml(text, grounded) {
     const flushList = () => {
         if (listBuf.length) { htmlParts.push('<ul>' + listBuf.map((i) => `<li>${i}</li>`).join('') + '</ul>'); listBuf = []; }
     };
-    for (const line of lines) {
-        if (!line) { flushParagraph(); flushList(); continue; }
+
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+        if (!line) { flushParagraph(); flushList(); i++; continue; }
+
+        if (TABLE_ROW_RE.test(line) && lines[i + 1] && TABLE_SEP_RE.test(lines[i + 1])) {
+            flushParagraph();
+            flushList();
+            const header = parseTableRow(line);
+            const bodyRows = [];
+            i += 2; // skip header + separator
+            while (i < lines.length && TABLE_ROW_RE.test(lines[i])) {
+                bodyRows.push(parseTableRow(lines[i]));
+                i++;
+            }
+            const theadHtml = `<thead><tr>${header.map((c) => `<th>${c}</th>`).join('')}</tr></thead>`;
+            const tbodyHtml = `<tbody>${bodyRows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>`;
+            htmlParts.push(`<div class="cop-table-wrap"><table>${theadHtml}${tbodyHtml}</table></div>`);
+            continue;
+        }
+
         const listMatch = line.match(/^(?:[-*]|\d+\.)\s+(.*)$/);
         if (listMatch) { flushParagraph(); listBuf.push(listMatch[1]); }
         else { flushList(); paragraphBuf.push(line); }
+        i++;
     }
     flushParagraph();
     flushList();
