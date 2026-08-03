@@ -1234,6 +1234,15 @@ body.copilot-panel-open .detail-drawer { right: calc(var(--copilot-w) + 1px); }
 .cop-msg-assistant .cop-msg-bubble strong { font-weight: 700; }
 .cop-msg-meta { font-size: 9.5px; color: var(--muted); margin-top: 3px; }
 
+/* Markdown tables in assistant answers (see api/_lib/formatAnswer.js) --
+   wrapped so a wide comparison table scrolls inside the ~380px-wide panel
+   instead of overflowing it. */
+.cop-msg-assistant .cop-msg-bubble .cop-table-wrap { margin: 0 0 8px; overflow-x: auto; }
+.cop-msg-assistant .cop-msg-bubble .cop-table-wrap:last-child { margin-bottom: 0; }
+.cop-msg-assistant .cop-msg-bubble table { border-collapse: collapse; width: 100%; font-size: 11.5px; white-space: nowrap; }
+.cop-msg-assistant .cop-msg-bubble th, .cop-msg-assistant .cop-msg-bubble td { padding: 5px 8px; border: 1px solid var(--hairline); text-align: left; }
+.cop-msg-assistant .cop-msg-bubble th { background: var(--sage-wash); font-weight: 700; }
+
 /* Deep-link tokens embedded in assistant prose (see api/_lib/formatAnswer.js) --
    reuse the existing searchGotoSA3/searchGotoClinic/etc. navigation entry
    points via Copilot.followLink(), never a new navigation mechanism. */

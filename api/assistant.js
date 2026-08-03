@@ -26,9 +26,9 @@
 // API key, no auth gate (same public/unauthenticated posture as every
 // other endpoint in this app).
 
-import { generateText, tool, stepCountIs, gateway } from 'ai';
+import { streamText, tool, stepCountIs, gateway } from 'ai';
 import { z } from 'zod';
-import { supabaseSelect, fetchGazetteerNames, matchGazetteerRegion, fetchGazetteerMembers } from './_lib/supabaseRest.js';
+import { supabaseSelect, supabaseSelectWithCount, fetchGazetteerNames, matchGazetteerRegion, fetchGazetteerMembers } from './_lib/supabaseRest.js';
 import { formatAnswerHtml } from './_lib/formatAnswer.js';
 
 const MODEL = 'anthropic/claude-sonnet-5';
@@ -52,6 +52,29 @@ const MAX_OUTPUT_TOKENS = 1500;
 // step to be text-only, so running out of budget can no longer produce a
 // silently empty answer.
 const MAX_STEPS = 8;
+
+// Friendly progress labels streamed to the client while a tool call is in
+// flight (see handler() below) -- purely cosmetic, no effect on the model
+// or tool behavior. One label per read tool; the 8 mutation tools share a
+// single generic label since the user doesn't need to distinguish which
+// filter is being staged, just that something concrete is happening.
+const TOOL_STATUS_LABELS = {
+    resolve_gazetteer_region: 'Resolving region…',
+    query_sa3_regions: 'Querying regions…',
+    query_clinics: 'Querying clinics…',
+    summarize_clinic_chain: 'Summarizing chains…',
+    query_data_coverage: 'Checking data coverage…',
+    query_gp_billing: 'Checking billing data…',
+    search_web: 'Searching the web…'
+};
+const MUTATION_TOOL_NAMES = new Set([
+    'set_scoring_market', 'toggle_clinic_layer', 'set_geography_filter',
+    'load_catalogue_dataset', 'set_ground_filter', 'set_colour_by_lens',
+    'focus_on_region', 'focus_on_clinic'
+]);
+function statusLabelForTool(toolName) {
+    return TOOL_STATUS_LABELS[toolName] || (MUTATION_TOOL_NAMES.has(toolName) ? 'Applying changes…' : 'Working…');
+}
 
 const STATE_NAMES = [
     'New South Wales', 'Victoria', 'Queensland', 'Western Australia',
@@ -215,34 +238,15 @@ function buildTools(grounded, planSteps, skipped) {
                 params.push(['order', `${args.sortBy || 'composite_score'}.${args.sortDir || 'desc'}`]);
                 params.push(['limit', String(limit)]);
 
-                const rows = await supabaseSelect('sa3', params);
+                // A single request with Prefer: count=exact (via
+                // supabaseSelectWithCount) returns both the limited rows and
+                // the true total match count together, so the model can
+                // honestly say "N match, showing top limit" without a
+                // second, redundant round-trip.
+                const { rows, totalCount } = await supabaseSelectWithCount('sa3', params);
                 rows.forEach((r) => grounded.sa3.add(r.sa3_code));
 
-                // totalMatches: a second, count-only request with the same
-                // filters (Prefer: count=exact) so the model can honestly say
-                // "N match, showing top limit" rather than assuming rows.length
-                // is the whole answer.
-                const countParams = params.filter(([k]) => k !== 'select' && k !== 'order' && k !== 'limit');
-                countParams.unshift(['select', 'sa3_code']);
-                let totalMatches = rows.length;
-                try {
-                    const qs = new URLSearchParams(countParams).toString();
-                    const res = await fetch(`https://ytervdshmvdawoomhnlp.supabase.co/rest/v1/sa3?${qs}`, {
-                        headers: {
-                            apikey: 'sb_publishable_3cXEeYAJg3u3CX_j8ITJQg_jLLPouw-',
-                            Authorization: 'Bearer sb_publishable_3cXEeYAJg3u3CX_j8ITJQg_jLLPouw-',
-                            Prefer: 'count=exact',
-                            Range: '0-0'
-                        }
-                    });
-                    const contentRange = res.headers.get('content-range');
-                    if (contentRange?.includes('/')) {
-                        const total = contentRange.split('/')[1];
-                        if (total && total !== '*') totalMatches = parseInt(total, 10);
-                    }
-                } catch { /* fall back to rows.length */ }
-
-                return { rows, totalMatches, returned: rows.length };
+                return { rows, totalMatches: totalCount, returned: rows.length };
             }
         }),
 
@@ -578,17 +582,50 @@ export default async function handler(req, res) {
         return;
     }
 
+    // Everything above can still fail with a normal HTTP error status. Once
+    // res.writeHead() below runs, the response is committed to a 200
+    // NDJSON stream -- any failure past that point can only be signalled
+    // via a {"type":"error",...} line, never a new status code.
+    let gazetteer, grounded, planSteps, skipped, tools;
     try {
-        const gazetteer = await fetchGazetteerNames();
-        const grounded = { sa3: new Set(), clinic: new Set(), chain: new Set(), regionName: new Set() };
-        const planSteps = [];
-        const skipped = [];
+        gazetteer = await fetchGazetteerNames();
+        grounded = { sa3: new Set(), clinic: new Set(), chain: new Set(), regionName: new Set() };
+        planSteps = [];
+        skipped = [];
+        tools = buildTools(grounded, planSteps, skipped);
+    } catch (err) {
+        console.error('[assistant] setup error', err);
+        res.status(502).json({ error: "Couldn't reach the model just now — try again." });
+        return;
+    }
 
-        const result = await generateText({
+    // NDJSON (one JSON object per '\n'-terminated line), not SSE and not a
+    // single JSON body -- lets the client render live "Querying regions…"
+    // style progress while the actual answer text is buffered server-side
+    // (see below) and only ever formatted/linkified once it's complete, so
+    // formatAnswerHtml()'s escape-then-reintroduce-markdown pass never has
+    // to deal with partial/incomplete text. X-Accel-Buffering/no-transform
+    // are defense-in-depth against any intermediary that might otherwise
+    // buffer the whole response before forwarding it.
+    res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
+    const writeEvent = (evt) => res.write(JSON.stringify(evt) + '\n');
+    writeEvent({ type: 'status', label: 'Thinking…' });
+
+    let raw = '';
+    let sawText = false;
+    let streamErrored = false;
+
+    try {
+        const result = streamText({
             model: MODEL,
             system: buildSystemPrompt(gazetteer, stateJson),
             messages: messages.map((m) => ({ role: m.role, content: m.text })),
-            tools: buildTools(grounded, planSteps, skipped),
+            tools,
             stopWhen: stepCountIs(MAX_STEPS),
             maxOutputTokens: MAX_OUTPUT_TOKENS,
             // Guarantees a non-empty final answer even if every prior step
@@ -603,22 +640,47 @@ export default async function handler(req, res) {
             )
         });
 
-        const raw = (result.text || '').trim();
-        console.log('[assistant] usage', result.usage, 'steps', result.steps?.length, 'planSteps', planSteps.length);
-
-        if (!raw) {
-            res.status(502).json({ error: 'Model returned an empty answer — try rephrasing.' });
-            return;
+        for await (const part of result.fullStream) {
+            if (part.type === 'tool-call') {
+                writeEvent({ type: 'status', label: statusLabelForTool(part.toolName) });
+            } else if (part.type === 'text-delta') {
+                // Buffered, never forwarded raw to the client -- only the
+                // one-time "the model has started writing" status ping is
+                // live; the actual text is formatted/grounded atomically
+                // once the full answer is in (see below).
+                if (!sawText) { writeEvent({ type: 'status', label: 'Writing answer…' }); sawText = true; }
+                raw += part.text;
+            } else if (part.type === 'error') {
+                console.error('[assistant] stream error part', part.error);
+                streamErrored = true;
+            }
         }
 
-        const answer = formatAnswerHtml(raw, grounded);
-        const plan = planSteps.length
-            ? { status: skipped.length ? 'partial' : 'applied', steps: planSteps, skipped }
-            : null;
-
-        res.status(200).json({ answer, plan });
+        const usage = await result.totalUsage;
+        const stepsRun = await result.steps;
+        console.log('[assistant] usage', usage, 'steps', stepsRun.length, 'planSteps', planSteps.length);
     } catch (err) {
         console.error('[assistant] Gateway/model error', err);
-        res.status(502).json({ error: "Couldn't reach the model just now — try again." });
+        streamErrored = true;
     }
+
+    if (streamErrored) {
+        writeEvent({ type: 'error', message: "Couldn't reach the model just now — try again." });
+        res.end();
+        return;
+    }
+
+    raw = raw.trim();
+    if (!raw) {
+        writeEvent({ type: 'error', message: 'Model returned an empty answer — try rephrasing.' });
+        res.end();
+        return;
+    }
+
+    const answer = formatAnswerHtml(raw, grounded);
+    const plan = planSteps.length
+        ? { status: skipped.length ? 'partial' : 'applied', steps: planSteps, skipped }
+        : null;
+    writeEvent({ type: 'done', answer, plan });
+    res.end();
 }

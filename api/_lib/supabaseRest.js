@@ -52,6 +52,36 @@ export async function supabaseSelect(table, params) {
     }
 }
 
+// Same as supabaseSelect, but adds `Prefer: count=exact` to the SAME
+// request (rather than issuing a second, count-only fetch afterward) and
+// reads the exact total match count back from the `Content-Range` response
+// header. PostgREST returns both the (limited) row body and the true total
+// count for the full filtered set in one round-trip when this header is
+// present -- callers that need an honest "N total, showing top limit"
+// figure (e.g. query_sa3_regions in api/assistant.js) should use this
+// instead of supabaseSelect() + a separate manual count fetch.
+export async function supabaseSelectWithCount(table, params) {
+    try {
+        const pairs = Array.isArray(params) ? params : Object.entries(params);
+        const qs = new URLSearchParams(pairs).toString();
+        const res = await fetch(`${DATA_SUPABASE_URL}/rest/v1/${table}?${qs}`, {
+            headers: { ...AUTH_HEADERS, Prefer: 'count=exact' }
+        });
+        if (!res.ok) return { rows: [], totalCount: 0 };
+        const rows = await res.json();
+        const rowsArr = Array.isArray(rows) ? rows : [];
+        let totalCount = rowsArr.length;
+        const contentRange = res.headers.get('content-range');
+        if (contentRange?.includes('/')) {
+            const total = contentRange.split('/')[1];
+            if (total && total !== '*') totalCount = parseInt(total, 10);
+        }
+        return { rows: rowsArr, totalCount };
+    } catch {
+        return { rows: [], totalCount: 0 };
+    }
+}
+
 // Cached per cold-start (region_definitions is small, hand-curated, and
 // changes rarely — see scripts/supabase_migration/schema.sql's "Gap 1"
 // comment). Refetched if empty (e.g. first request after cold start, or if
