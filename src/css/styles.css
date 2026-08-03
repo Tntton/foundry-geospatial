@@ -1219,6 +1219,13 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
     line-height: 1.5;
     padding: 9px 12px;
     border-radius: 10px;
+    /* .cop-msg uses align-items:flex-start, so its child bubble sizes to
+       its own content's natural width instead of stretching/clipping to
+       the message's max-width -- a wide table's nowrap cells could
+       otherwise balloon the whole bubble past the panel edge before
+       .cop-table-wrap's own overflow-x:auto ever gets a chance to matter. */
+    max-width: 100%;
+    box-sizing: border-box;
 }
 .cop-msg-user .cop-msg-bubble {
     background: var(--sage-deep);
