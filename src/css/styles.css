@@ -1137,6 +1137,11 @@ input, select { font-family: inherit; }
 }
 .cop-panel.active { transform: translateX(0); }
 body.copilot-panel-open .detail-drawer { right: calc(var(--copilot-w) + 1px); }
+/* Same coexistence treatment for the clinic isochrone/comparison panel --
+   without this it sits pinned to right:0 at z-index:45, well above
+   .cop-panel's 16, and would render directly on top of the chat panel
+   instead of shifting aside like .detail-drawer does. */
+body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px); }
 
 .cop-panel-hdr {
     display: flex;
