@@ -68,8 +68,30 @@ function linkifyTokens(html, grounded) {
 const TABLE_ROW_RE = /^\|(.+)\|$/;
 const TABLE_SEP_RE = /^\|[\s:|-]+\|$/;
 
+// A plain line.split('|') would also split on the '|' INSIDE a deep-link
+// token (e.g. "[[region:12701|Bringelly - Green Valley]]" has its own
+// internal '|' separating id from label) -- chopping the token in half
+// right at a cell boundary, so it can never match TOKEN_RE later and just
+// renders as two garbled fragments in adjacent cells. Track bracket depth
+// so a '|' inside an open "[[...]]" span is never treated as a column
+// delimiter.
+function splitTableCells(inner) {
+    const cells = [];
+    let buf = '';
+    let depth = 0;
+    for (let i = 0; i < inner.length; i++) {
+        const two = inner[i] + (inner[i + 1] || '');
+        if (two === '[[') { depth++; buf += two; i++; continue; }
+        if (two === ']]') { depth = Math.max(0, depth - 1); buf += two; i++; continue; }
+        if (inner[i] === '|' && depth === 0) { cells.push(buf.trim()); buf = ''; continue; }
+        buf += inner[i];
+    }
+    cells.push(buf.trim());
+    return cells;
+}
+
 function parseTableRow(line) {
-    return line.slice(1, -1).split('|').map((c) => c.trim());
+    return splitTableCells(line.slice(1, -1));
 }
 
 // Same constrained-markdown-to-HTML conversion as the old ask-read.js
