@@ -61,6 +61,7 @@
     --footer-h: 32px;
     --rail-w: 330px;
     --drawer-w: 420px;
+    --copilot-w: 380px;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1110,6 +1111,235 @@ input, select { font-family: inherit; }
 
 .detail-drawer::-webkit-scrollbar { width: 6px; }
 .detail-drawer::-webkit-scrollbar-thumb { background: var(--hairline-strong); border-radius: 3px; }
+
+/* ============================================================
+ * Assistant chat panel — replaces the old ⌘K Spotlight overlay/checklist/
+ * banner cluster (see git history) with a persistent, dockable panel.
+ * Same absolute-positioned, transform-slide pattern as .detail-drawer
+ * above; when both are open, .detail-drawer shifts left rather than being
+ * covered — the exact technique already proven for the old dual-drawer
+ * case (.target-overview-drawer's `right: calc(var(--drawer-w) + 1px)`).
+ * ============================================================ */
+.cop-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--copilot-w);
+    background: var(--white);
+    border-left: 1px solid var(--hairline);
+    box-shadow: -8px 0 24px rgba(20, 30, 25, 0.06);
+    transform: translateX(100%);
+    transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 16; /* one tier above .detail-drawer's 15 -- always frontmost, though the offset rule below usually means they never overlap */
+    display: flex;
+    flex-direction: column;
+}
+.cop-panel.active { transform: translateX(0); }
+body.copilot-panel-open .detail-drawer { right: calc(var(--copilot-w) + 1px); }
+
+.cop-panel-hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--hairline);
+    flex-shrink: 0;
+}
+.cop-panel-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+.cop-panel-new, .cop-panel-close {
+    margin-left: auto;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 6px;
+}
+.cop-panel-new:hover, .cop-panel-close:hover { color: var(--ink); }
+.cop-panel-new + .cop-panel-close { margin-left: 0; }
+
+.cop-panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.cop-panel-body::-webkit-scrollbar { width: 6px; }
+.cop-panel-body::-webkit-scrollbar-thumb { background: var(--hairline-strong); border-radius: 3px; }
+
+.cop-panel-empty {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+    text-align: center;
+    margin: auto 0;
+    padding: 20px 10px;
+}
+
+.cop-suggested-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.cop-suggested-chip {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--sage-deep);
+    background: var(--sage-tint);
+    border: 1px solid var(--sage-light);
+    border-radius: 12px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-family: inherit;
+}
+.cop-suggested-chip:hover { border-color: var(--sage); }
+
+.cop-msg { display: flex; flex-direction: column; max-width: 90%; }
+.cop-msg-user { align-self: flex-end; align-items: flex-end; }
+.cop-msg-assistant { align-self: flex-start; align-items: flex-start; }
+.cop-msg-context-pill {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 2px 8px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+}
+.cop-msg-bubble {
+    font-size: 12.5px;
+    line-height: 1.5;
+    padding: 9px 12px;
+    border-radius: 10px;
+}
+.cop-msg-user .cop-msg-bubble {
+    background: var(--sage-deep);
+    color: #fff;
+    border-bottom-right-radius: 2px;
+}
+.cop-msg-assistant .cop-msg-bubble {
+    background: var(--surface-2);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    border-bottom-left-radius: 2px;
+}
+.cop-msg-assistant .cop-msg-bubble p { margin: 0 0 8px; }
+.cop-msg-assistant .cop-msg-bubble p:last-child { margin-bottom: 0; }
+.cop-msg-assistant .cop-msg-bubble ul { margin: 0 0 8px; padding-left: 18px; }
+.cop-msg-assistant .cop-msg-bubble ul:last-child { margin-bottom: 0; }
+.cop-msg-assistant .cop-msg-bubble li { margin-bottom: 4px; }
+.cop-msg-assistant .cop-msg-bubble strong { font-weight: 700; }
+.cop-msg-meta { font-size: 9.5px; color: var(--muted); margin-top: 3px; }
+
+/* Deep-link tokens embedded in assistant prose (see api/_lib/formatAnswer.js) --
+   reuse the existing searchGotoSA3/searchGotoClinic/etc. navigation entry
+   points via Copilot.followLink(), never a new navigation mechanism. */
+.cop-token {
+    display: inline;
+    font: inherit;
+    font-weight: 600;
+    color: var(--sage-deep);
+    background: none;
+    border: none;
+    border-bottom: 1px dashed var(--sage);
+    padding: 0;
+    cursor: pointer;
+}
+.cop-token:hover { color: var(--sage); border-bottom-style: solid; }
+
+/* Inline "Thinking…" placeholder — reuses .rd-blink-dot's existing animation. */
+.cop-msg-thinking { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+
+/* State-change plan card, nested inside an assistant bubble -- same
+   applied/partial badge vocabulary as the old standalone copilot banner,
+   just relocated into the transcript instead of floating over the map. */
+.cop-msg-plan {
+    margin-top: 8px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--white);
+}
+.cop-msg-plan-hdr { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--hairline); }
+.cop-msg-plan-badge {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 5px;
+    border-radius: 2px;
+    line-height: 1;
+    background: var(--warning-bg);
+    color: #7A5800;
+    border: 1px solid var(--warning);
+}
+.cop-msg-plan-applied .cop-msg-plan-badge { background: var(--sage-tint); color: var(--sage-deep); border-color: var(--sage); }
+.cop-msg-plan-steps { padding: 6px 10px; font-size: 11px; color: var(--ink); line-height: 1.6; }
+.cop-msg-plan-skipped { padding: 0 10px 8px; font-size: 10.5px; color: var(--muted); line-height: 1.4; }
+
+.cop-panel-composer {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--hairline);
+    flex-shrink: 0;
+}
+.cop-input {
+    flex: 1;
+    resize: none;
+    font-family: inherit;
+    font-size: 12.5px;
+    line-height: 1.4;
+    padding: 8px 10px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    max-height: 90px;
+}
+.cop-input:focus { outline: none; border-color: var(--sage); }
+.cop-send-btn {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    font-size: 14px;
+    background: var(--sage-deep);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.cop-send-btn:hover { background: var(--sage); }
+.cop-panel-reset-row { padding: 0 14px 8px; }
+.cop-panel-reset-btn {
+    font-size: 10.5px;
+    color: var(--muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    font-family: inherit;
+    padding: 0;
+}
+.cop-panel-reset-btn:hover { color: var(--ink); }
+
+/* Redirect line inside the region/clinic read panel, replacing the old
+   scoped free-text follow-up input -- opens the global assistant panel
+   instead of a second, per-entity Q&A surface. */
+.rd-ask-redirect { font-size: 10.5px; color: var(--muted); margin-top: 4px; }
+
+/* Reused by both TP.focusChainRow() (Targets dossier row) and
+   focusCatalogueItem() (Data Catalogue row) to flash the deep-linked
+   target into view -- same pulse timing as .rail-accordion.copilot-pulse
+   below, applied to a <tr>/.catalogue-row instead of a rail section. */
+@keyframes tdRowFlash { 0%, 100% { background: transparent; } 50% { background: var(--sage-wash); } }
+.td-row-flash { animation: tdRowFlash 1.6s ease-in-out 1; }
 
 .drawer-close {
     position: absolute;
@@ -2388,6 +2618,40 @@ input, select { font-family: inherit; }
     }
 
     .detail-drawer::before {
+        content: '';
+        display: block;
+        width: 40px;
+        height: 4px;
+        background: var(--hairline-strong);
+        border-radius: 2px;
+        margin: 0 auto 4px;
+    }
+
+    /* Assistant panel becomes a bottom sheet on mobile, same mechanics as
+       .detail-drawer above -- only one sheet is meant to be visible at a
+       time (Copilot.open() closes the drawer/rail sheets, mirroring
+       openDrawerForSA3()'s existing mobile handling), so this doesn't need
+       its own offset-from-drawer rule the way the desktop panel does. */
+    .cop-panel {
+        position: fixed;
+        top: auto;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 70vh;
+        max-height: 85vh;
+        border-left: none;
+        border-top: 1px solid var(--hairline);
+        border-radius: 14px 14px 0 0;
+        transform: translateY(100%);
+        transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+        z-index: 24; /* above .detail-drawer's mobile z-index:22 -- opening the assistant sheet replaces, not stacks behind, whatever sheet is open */
+        padding-top: 8px;
+    }
+    .cop-panel.active { transform: translateY(0); }
+    body.copilot-panel-open .detail-drawer { right: auto; } /* desktop-only offset rule, no-op on mobile */
+    .cop-panel::before {
         content: '';
         display: block;
         width: 40px;
@@ -6008,63 +6272,6 @@ input, select { font-family: inherit; }
 }
 .rd-chip:hover { background: var(--sage-tint); }
 
-.rd-thread-item {
-    border-left: 2px solid var(--sage-light);
-    padding-left: 10px;
-    margin-bottom: 10px;
-}
-.rd-thread-q { font-size: 11px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
-.rd-thread-a { font-family: var(--serif, Georgia, serif); font-size: 12.5px; line-height: 1.5; color: var(--ink); }
-.rd-thread-a p { margin: 0 0 8px; }
-.rd-thread-a p:last-child { margin-bottom: 0; }
-.rd-thread-a ul { margin: 0 0 8px; padding-left: 18px; }
-.rd-thread-a ul:last-child { margin-bottom: 0; }
-.rd-thread-a li { margin-bottom: 4px; }
-.rd-thread-a li:last-child { margin-bottom: 0; }
-.rd-thread-a strong { font-weight: 700; color: var(--ink); }
-.rd-live-tag {
-    font-family: var(--mono);
-    font-size: 8.5px;
-    font-weight: 600;
-    letter-spacing: .04em;
-    color: #8A6500;
-    background: #FFF6D9;
-    border: 1px solid #FFC000;
-    border-radius: 2px;
-    padding: 2px 6px;
-    margin-top: 6px;
-    display: inline-block;
-}
-
-.rd-followup-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border: 1px solid var(--hairline);
-    border-radius: 3px;
-    padding: 7px 10px;
-    background: #fff;
-}
-.rd-followup-input {
-    flex: 1;
-    min-width: 0;
-    border: none;
-    outline: none;
-    font-size: 11.5px;
-    font-family: inherit;
-    color: var(--ink);
-    background: transparent;
-}
-.rd-followup-send {
-    font-size: 14px;
-    line-height: 1;
-    color: var(--sage-deep);
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-family: inherit;
-}
-.rd-followup-note { font-size: 9.5px; color: var(--muted); margin-top: 6px; line-height: 1.4; }
 
 .rd-collapsed-row {
     display: flex;
@@ -6910,296 +7117,42 @@ input, select { font-family: inherit; }
     flex-shrink: 0;
 }
 
-/* ============================================================
- * Natural-language co-pilot (plan Phase H)
- * ============================================================ */
-
-/* Live checklist — anchored at the same spot .global-search-results uses,
-   extending the existing ⌘K surface rather than a new floating panel. */
-.copilot-checklist {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
-    background: var(--white);
-    border: 1px solid var(--hairline);
-    border-radius: 4px;
-    box-shadow: var(--shadow-md);
-    z-index: 60;
-    overflow: hidden;
-}
-.copilot-checklist.hidden { display: none; }
-.copilot-checklist-hdr {
-    padding: 8px 12px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-    border-bottom: 1px solid var(--hairline);
-    background: var(--surface-2);
-}
-.copilot-checklist-body { padding: 8px 4px; display: flex; flex-direction: column; gap: 7px; }
-.copilot-step {
-    display: grid;
-    grid-template-columns: 16px 1fr auto;
-    gap: 8px;
-    align-items: baseline;
-    padding: 2px 8px;
-    font-size: 12.5px;
-}
-.copilot-step-icon { font-family: var(--mono); font-size: 11px; text-align: center; }
-.copilot-step-icon.queued { color: var(--hairline-strong); }
-.copilot-step-icon.running { color: var(--warning); }
-.copilot-step-icon.done { color: var(--sage-deep); }
-.copilot-step-label { color: var(--ink); line-height: 1.4; }
-.copilot-step.queued .copilot-step-label { color: var(--muted); }
-.copilot-step-tag { font-family: var(--mono); font-size: 9.5px; color: var(--muted); white-space: nowrap; }
-
-/* Applied/decline/partial banner — shares .weight-warning's floating
-   top-centre slot and amber "differs from base case" register, extended
-   with the richer content the co-pilot needs. Only one of the two banners
-   shows at once (see renderCopilotBanner()/hideCopilotBanner() in app.js). */
-.copilot-banner {
-    position: absolute;
-    top: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 12;
-    width: min(620px, calc(100% - 32px));
-    background: var(--white);
-    border: 1px solid var(--warning);
-    border-left: 3px solid var(--warning);
-    border-radius: 4px;
-    box-shadow: var(--shadow-sm);
-    font-size: 12.5px;
-}
-.copilot-banner.hidden { display: none; }
-.copilot-banner.declined { border-color: var(--hairline-strong); border-left-color: var(--hairline-strong); }
-.copilot-banner-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-}
-.copilot-banner-badge {
-    font-family: var(--mono);
-    font-size: 8.5px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 3px 5px;
-    border-radius: 2px;
-    line-height: 1;
-    flex-shrink: 0;
-    background: var(--warning-bg);
-    color: #7A5800;
-    border: 1px solid var(--warning);
-}
-.copilot-banner.declined .copilot-banner-badge,
-.copilot-banner-badge.neutral {
-    background: var(--surface-2);
-    color: var(--muted);
-    border-color: var(--hairline);
-}
-.copilot-banner-text { flex: 1; min-width: 0; color: var(--ink); line-height: 1.4; }
-.copilot-banner-text .copilot-banner-sub { color: var(--muted); }
-.copilot-banner-btn {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--sage-deep);
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-family: inherit;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-    padding: 0;
-    flex-shrink: 0;
-    white-space: nowrap;
-}
-.copilot-banner-toggle {
-    font-size: 11px;
-    color: var(--muted);
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-family: inherit;
-    padding: 0;
-    flex-shrink: 0;
-    white-space: nowrap;
-}
-.copilot-banner-log {
-    border-top: 1px solid var(--hairline);
-    background: var(--surface-2);
-    padding: 3px 0;
-}
-.copilot-banner-log-row {
-    display: grid;
-    grid-template-columns: 50px 1fr auto;
-    gap: 10px;
-    align-items: baseline;
-    padding: 7px 14px;
-    border-top: 1px solid var(--hairline);
-}
-.copilot-banner-log-row:first-child { border-top: none; }
-.copilot-banner-log-query { font-size: 11.5px; color: var(--ink); line-height: 1.4; }
-.copilot-banner-log-delta { font-family: var(--mono); font-size: 9.5px; color: var(--muted); white-space: nowrap; }
-.copilot-camera-held {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 14px;
-    border-top: 1px solid var(--hairline);
-    background: var(--surface-2);
-    font-size: 11px;
-}
-.copilot-camera-held-badge {
-    font-family: var(--mono);
-    font-size: 8.5px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    color: #5A5A55;
-    background: var(--surface-2);
-    border: 1px solid var(--hairline);
-    border-radius: 2px;
-    padding: 2px 5px;
-    line-height: 1;
-    flex-shrink: 0;
-}
-
-/* Rail step pulse (plan Phase H) — briefly highlights which of the 4
+/* Rail step pulse — briefly highlights which of the 4
    funnel steps the co-pilot's intent actually touched, so a typed sentence
    visibly operates the same rail a click would. */
 @keyframes copilotPulseStep { 0%, 100% { background: var(--white); } 50% { background: var(--sage-wash); } }
 .rail-accordion.copilot-pulse { animation: copilotPulseStep 1.6s ease-in-out 2; }
 
-/* ============================================================
- * Spotlight ⌘K overlay (plan Phase H follow-up)
- * ============================================================
- * The existing header search bar elevates in place into a centered,
- * enlarged overlay — no separate cloned input, no second surface. Same
- * element, same ids/JS wiring throughout; only its position/size changes
- * via this state class, matching how the rest of this app prefers
- * generalizing an existing control over inventing a new one. */
-.spotlight-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(20, 22, 20, 0.55);
-    backdrop-filter: blur(2px);
-    z-index: 900;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-}
-.spotlight-backdrop.hidden { display: none; }
-body.spotlight-active .spotlight-backdrop { opacity: 1; }
-
-/* .app-header establishes its own stacking context (position:relative +
-   z-index:50) — .global-search-wrap's z-index:901 below only wins against
-   its OWN siblings inside that context, never against .spotlight-backdrop
-   (a sibling of .app-header itself, not of .global-search-wrap). Without
-   this, the backdrop silently paints over the enlarged search bar and
-   swallows every click meant for the results list. Raise the header's own
-   stacking position instead of chasing z-index numbers deeper down. */
-body.spotlight-active .app-header { position: relative; z-index: 950; }
-
-/* Mobile (<1024px) hides .app-header entirely (`display:none !important`,
-   replaced by .mob-topbar) — an ancestor's display:none prevents anything
-   inside from rendering at all, fixed-position or not, so Spotlight needs
-   to selectively bring just the search wrap's chain back rather than the
-   whole header (brand/methodology/login would otherwise clutter a 375px
-   screen alongside the enlarged centered search bar). */
-@media (max-width: 1024px) {
-    body.spotlight-active .app-header {
-        display: block !important;
-        background: transparent;
-        border-bottom: none;
-        padding: 0;
-        pointer-events: none;
-    }
-    body.spotlight-active .app-header > *:not(.actions) { display: none !important; }
-    body.spotlight-active .app-header .actions > *:not(.global-search-wrap) { display: none !important; }
-    body.spotlight-active .app-header .actions { display: block; pointer-events: none; }
-    body.spotlight-active .global-search-wrap { pointer-events: auto; }
-}
-
-body.spotlight-active .global-search-wrap {
-    position: fixed;
-    top: 14vh;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(620px, 90vw);
-    z-index: 901;
-    animation: spotlightIn 0.16s ease both;
-}
-@keyframes spotlightIn {
-    from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
-    to { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-body.spotlight-active .global-search {
-    padding: 14px 16px;
-    border-radius: 8px;
-    border-color: var(--sage);
-    background: var(--white);
-    box-shadow: 0 24px 60px rgba(0,0,0,0.28);
-}
-body.spotlight-active .global-search-icon { width: 17px; height: 17px; }
-body.spotlight-active .global-search-input { font-size: 17px; }
-body.spotlight-active .global-search-ai-badge { display: none; } /* redundant once you're already in it */
-
 /* Collapsed header search bar — flags AI capability up front rather than
-   relying on placeholder text alone (user feedback: "not just search"). */
-.global-search-ai-badge {
+   relying on placeholder text alone (user feedback: "not just search").
+   Still accurate copy once ⌘K opens the persistent assistant panel instead
+   of the old Spotlight overlay -- kept as-is. */
+/* Assistant panel trigger — a real standalone button in the header
+   actions row, not a badge living inside the search box (that box is now
+   pure keyword search; asking the assistant is a separate, equally
+   discoverable action). */
+.cop-trigger-btn {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     flex-shrink: 0;
-    font-size: 10px;
+    font-family: inherit;
+    font-size: 11px;
     font-weight: 700;
     color: var(--sage-deep);
     background: var(--sage-tint);
     border: 1px solid var(--sage-light);
-    border-radius: 10px;
-    padding: 2px 7px;
+    border-radius: 6px;
+    padding: 6px 10px;
     white-space: nowrap;
     cursor: pointer;
 }
-.global-search-ai-badge kbd {
+.cop-trigger-btn:hover { border-color: var(--sage); background: var(--sage-wash); }
+.cop-trigger-btn kbd {
     font-family: var(--sans);
-    font-size: 9px;
+    font-size: 9.5px;
     font-weight: 600;
     color: var(--sage-deep);
     opacity: 0.75;
 }
 
-/* Hint text sits directly on the dimmed/blurred backdrop (no white card
-   behind it), so it needs light text, not the app's usual dark-on-light
-   muted grey. */
-.spotlight-hint {
-    display: none;
-    padding: 10px 16px 2px;
-    font-size: 12px;
-    line-height: 1.5;
-    color: rgba(255,255,255,0.75);
-}
-.spotlight-hint em { color: #fff; font-style: normal; font-weight: 600; }
-body.spotlight-active .spotlight-hint.visible { display: block; }
-
-/* ESC-to-close hint, top-left of the dimmed backdrop. */
-.spotlight-esc-hint {
-    display: none;
-    position: fixed;
-    top: 72px; /* below .app-header's own 56px band, not inside it — the light/translucent styling below assumes it sits over the dark dimmed backdrop, not the header's opaque white background */
-    left: 20px;
-    z-index: 960; /* above .app-header's own spotlight-active z-index:950, same stacking-context lesson as the search wrap fix above */
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 600;
-    color: #fff;
-    background: rgba(255,255,255,0.14);
-    border: 1px solid rgba(255,255,255,0.3);
-    border-radius: 4px;
-    padding: 5px 9px;
-    cursor: pointer;
-}
-body.spotlight-active .spotlight-esc-hint { display: inline-block; }
