@@ -26,7 +26,7 @@
 // API key, no auth gate (same public/unauthenticated posture as every
 // other endpoint in this app).
 
-import { generateText, tool, stepCountIs } from 'ai';
+import { generateText, tool, stepCountIs, gateway } from 'ai';
 import { z } from 'zod';
 import { supabaseSelect, fetchGazetteerNames, matchGazetteerRegion, fetchGazetteerMembers } from './_lib/supabaseRest.js';
 import { formatAnswerHtml } from './_lib/formatAnswer.js';
@@ -45,7 +45,13 @@ const MAX_MESSAGES_CHARS = 16_000;
 const MAX_NEW_MESSAGE_CHARS = 500; // up from ask-read.js's/copilot.js's 300 -- open analytical questions need more room
 const MAX_STATE_CHARS = 2000;
 const MAX_OUTPUT_TOKENS = 1500;
-const MAX_STEPS = 6;
+// A tiny cap combined with a real multi-tool loop (now three tool
+// categories, including web search) risks the model spending its entire
+// budget on tool calls and never reaching a final text step -- raised from
+// 6, and paired with the prepareStep guard below that forces the *last*
+// step to be text-only, so running out of budget can no longer produce a
+// silently empty answer.
+const MAX_STEPS = 8;
 
 const STATE_NAMES = [
     'New South Wales', 'Victoria', 'Queensland', 'Western Australia',
@@ -74,20 +80,35 @@ function buildSystemPrompt(gazetteer, stateJson) {
         `navigation changes are only ever a proposed plan; the app applies it deterministically afterward, exactly ` +
         `like every other action in this app.\n\n` +
         `## Tools\n` +
-        `You have two kinds of tools. Read-only tools (resolve_gazetteer_region, query_sa3_regions, query_clinics, ` +
+        `You have three kinds of tools. Read-only tools (resolve_gazetteer_region, query_sa3_regions, query_clinics, ` +
         `summarize_clinic_chain, query_data_coverage, query_gp_billing) query the real database directly and return ` +
         `real rows — use them freely, including multiple calls in one turn, to actually answer analytical questions ` +
         `instead of guessing. State-change tools (set_scoring_market, toggle_clinic_layer, set_geography_filter, ` +
         `load_catalogue_dataset, set_ground_filter, set_colour_by_lens, focus_on_region, focus_on_clinic) only ever ` +
-        `stage a change — call them when the user is asking you to change what's shown, not just answer a question.\n\n` +
+        `stage a change — call them when the user is asking you to change what's shown, not just answer a question. ` +
+        `search_web searches the public internet — use it only for general context this app's database doesn't ` +
+        `track (industry news, regulatory background, general healthcare/demographic context); never use it to ` +
+        `answer a question about this app's own regions/clinics/scores, which must always come from the read-only ` +
+        `tools above.\n\n` +
         `## Ground rules\n` +
         `- Query before propose: never call focus_on_region/focus_on_clinic, or put a regionName into ` +
         `set_geography_filter, unless that exact sa3Code/clinicId/regionName already came back from a read tool ` +
         `earlier in THIS conversation. If a mutation tool rejects your input for this reason, call the matching read ` +
         `tool first, then retry.\n` +
-        `- Never state a specific region name, SA3 code, clinic name/id, score, or figure in your answer unless it ` +
-        `came from a tool result already in this conversation. If you don't have it, say so plainly — never estimate, ` +
-        `and never fall back on general knowledge about Australian geography or healthcare to fill a gap.\n` +
+        `- Never state a specific region name, SA3 code, clinic name/id, score, or figure tracked by this app unless ` +
+        `it came from a read-only tool result already in this conversation. If you don't have it, say so plainly — ` +
+        `never estimate, and never fall back on general knowledge about Australian geography or healthcare to fill a ` +
+        `gap in this app's own data.\n` +
+        `- search_web results are the one exception to "don't use general knowledge" — you may state what a web ` +
+        `search returns, but always attribute it plainly (e.g. "From a web search:") so the user can tell this ` +
+        `app's own data apart from outside context. Never blend the two into one unattributed claim, and never use ` +
+        `a web result to override or fill in a figure this app is supposed to track itself.\n` +
+        `- This app's own data always outranks search_web when the two disagree. If a web result contradicts a ` +
+        `read-only tool result (e.g. a clinic count, a chain's footprint, a demographic figure this app tracks), ` +
+        `state the app's own figure as the answer, and only mention the web figure as a flagged discrepancy (e.g. ` +
+        `"this app shows N; a web search suggested a different figure, but this app's own data should be treated ` +
+        `as authoritative here") -- never silently prefer the web figure, and never average or split the difference ` +
+        `between the two.\n` +
         `- Real, curated named regions (valid resolve_gazetteer_region / regionName values, matched case-insensitively ` +
         `including aliases): ${regionList}. If a named place isn't in this list, resolve_gazetteer_region will tell ` +
         `you so — don't guess a nearby real region instead.\n` +
@@ -489,7 +510,15 @@ function buildTools(grounded, planSteps, skipped) {
                 planSteps.push({ tool: 'focus_on_clinic', args: { clinicId, label } });
                 return { ok: true };
             }
-        })
+        }),
+
+        // ---- Provider-executed tool (gateway-native — runs under the same
+        // AI_GATEWAY_API_KEY/OIDC credential already used for the model
+        // call, no new secret required, works regardless of which model
+        // string is routed to). Never touches `grounded` -- web results
+        // don't produce sa3/clinic/chain ids, so there's nothing for the
+        // deep-link/mutation-tool grounding checks to track here.
+        search_web: gateway.tools.perplexitySearch({ maxResults: 5 })
     };
 }
 
@@ -561,7 +590,17 @@ export default async function handler(req, res) {
             messages: messages.map((m) => ({ role: m.role, content: m.text })),
             tools: buildTools(grounded, planSteps, skipped),
             stopWhen: stepCountIs(MAX_STEPS),
-            maxOutputTokens: MAX_OUTPUT_TOKENS
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            // Guarantees a non-empty final answer even if every prior step
+            // was spent on tool calls: on the last allowed step, disable
+            // tools entirely so the model is structurally unable to do
+            // anything but write its final text response using whatever
+            // it already gathered. Without this, hitting the step cap
+            // mid-tool-call silently returns empty text (see the `!raw`
+            // check below, which this makes unreachable in practice).
+            prepareStep: ({ stepNumber }) => (
+                stepNumber === MAX_STEPS - 1 ? { toolChoice: 'none' } : {}
+            )
         });
 
         const raw = (result.text || '').trim();
