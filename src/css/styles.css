@@ -1137,6 +1137,11 @@ input, select { font-family: inherit; }
 }
 .cop-panel.active { transform: translateX(0); }
 body.copilot-panel-open .detail-drawer { right: calc(var(--copilot-w) + 1px); }
+/* Same coexistence treatment for the clinic isochrone/comparison panel --
+   without this it sits pinned to right:0 at z-index:45, well above
+   .cop-panel's 16, and would render directly on top of the chat panel
+   instead of shifting aside like .detail-drawer does. */
+body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px); }
 
 .cop-panel-hdr {
     display: flex;
@@ -1214,6 +1219,13 @@ body.copilot-panel-open .detail-drawer { right: calc(var(--copilot-w) + 1px); }
     line-height: 1.5;
     padding: 9px 12px;
     border-radius: 10px;
+    /* .cop-msg uses align-items:flex-start, so its child bubble sizes to
+       its own content's natural width instead of stretching/clipping to
+       the message's max-width -- a wide table's nowrap cells could
+       otherwise balloon the whole bubble past the panel edge before
+       .cop-table-wrap's own overflow-x:auto ever gets a chance to matter. */
+    max-width: 100%;
+    box-sizing: border-box;
 }
 .cop-msg-user .cop-msg-bubble {
     background: var(--sage-deep);

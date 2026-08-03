@@ -62,6 +62,7 @@ Copilot.open = function (seedText) {
         // Only one bottom sheet is meant to be visible at a time on mobile --
         // mirrors openDrawerForSA3()'s existing handling for the detail drawer.
         document.getElementById('detail-drawer')?.classList.remove('active');
+        document.getElementById('comparison-panel')?.classList.add('hidden');
         const rail = document.getElementById('map-rail');
         if (rail) {
             rail.classList.remove('open', 'snap-full', 'snap-expanded');
@@ -110,15 +111,15 @@ Copilot.handleComposerKeydown = function (e) {
 
 // ============================================================
 // "What's currently focused" — closes the gap the old copilot never
-// needed to read (it only ever set state). Region and clinic content
-// share one drawer DOM shell, so State.currentClinicId (set by
-// renderClinicDrawer, cleared by renderDrawer/closeDrawer -- see their own
-// comments in app.js) is the only reliable way to tell which kind is
-// currently showing.
+// needed to read (it only ever set state). State.activeClinicId is set by
+// loadAndShowIsochrone() (app.js) whenever a clinic pin is clicked, or a
+// clinic is opened via search/deep-link (both now route through the same
+// isochrone/comparison-panel path) -- it's the one live signal for "a
+// clinic is currently showing," independent of which entry point opened it.
 // ============================================================
 function copilotCurrentFocus() {
-    if (State.currentClinicId) {
-        const c = State.clinicsData.find((c) => String(c.clinic_id) === String(State.currentClinicId));
+    if (State.activeClinicId) {
+        const c = State.clinicsData.find((c) => String(c.clinic_id) === String(State.activeClinicId));
         if (c) return { type: 'clinic', id: c.clinic_id, label: c.clinic_name || c.name || 'this clinic' };
     }
     if (State.currentSA3Code) {

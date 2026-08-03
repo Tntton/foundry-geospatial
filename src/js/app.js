@@ -77,7 +77,6 @@ const State = {
     sa3ClinicCounts: {},
     currentState: '',
     currentSA3Code: null,
-    currentClinicId: null,   // which clinic renderClinicDrawer() last showed -- see its own comment; used by Copilot.currentFocus()
     currentView: 'map',
     currentMapView: 'composite',    // 'composite' | 'whitespace' | 'seifa'
     seifaRange: [1, 10],            // legacy; use seifaDeciles
@@ -3475,7 +3474,6 @@ function closeDrawer() {
         lastSelectedId = null;
     }
     State.currentSA3Code = null;
-    State.currentClinicId = null;
     if (isMobile()) {
         hideBackdrop();
         const rail = document.getElementById('map-rail');
@@ -3507,160 +3505,6 @@ function selectClinic(clinic) {
     loadAndShowIsochrone(fullClinic);
 }
 
-function renderClinicDrawer(clinic) {
-    // See renderDrawer()'s matching comment -- this is the one place that
-    // marks "a clinic is what's currently showing," for Copilot.currentFocus().
-    State.currentClinicId = clinic.clinic_id;
-    // Write into drawer-body (preserves the drawer shell so SA3 clicks still work)
-    const drawerBody = document.getElementById('drawer-body');
-
-    const confidenceChip = (conf) => {
-        const colors = { 'high': '#4CAF50', 'medium': '#FFC107', 'low': '#999999' };
-        return `<span style="background:${colors[conf] || '#999'};color:white;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;letter-spacing:0.03em;">${conf || '—'}</span>`;
-    };
-
-    drawerBody.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;position:relative;z-index:10;padding:12px;background:var(--surface);">
-            <button class="btn-primary" style="flex:1;font-size:12px;padding:8px 16px;" id="view-catchment-btn" aria-label="View Catchment">
-                View Catchment
-            </button>
-            <button class="btn-icon drawer-close" onclick="closeDrawer()" aria-label="Close">
-                <svg viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-            </button>
-        </div>
-
-        <div class="drawer-header">
-            <div class="drawer-eyebrow">
-                <span>Clinic</span>
-            </div>
-            <h2 class="drawer-title" style="font-size:17px;">${clinic.clinic_name || 'Clinic'}</h2>
-            <div class="drawer-subtitle">${clinic.suburb || ''}, ${clinic.state_code || ''} ${clinic.postcode || ''}</div>
-        </div>
-
-        <div class="drawer-section">
-            <div class="drawer-section-title">Address</div>
-            <div style="font-size:13px;line-height:1.6;color:var(--text-secondary);">${clinic.address || '—'}</div>
-        </div>
-
-        ${clinic.website ? `
-        <div class="drawer-section">
-            <div class="drawer-section-title">Website</div>
-            <a href="${clinic.website}" target="_blank" rel="noopener noreferrer" style="display:inline-block;color:var(--link,#0066cc);text-decoration:none;font-size:13px;word-break:break-all;padding:6px;background:var(--surface-2,#f5f5f5);border-radius:4px;border:1px solid var(--hairline);">
-                ${clinic.website}
-                <svg style="display:inline;width:12px;height:12px;margin-left:4px;vertical-align:-2px;" viewBox="0 0 16 16" fill="none"><path d="M13.3 3L3 13m0 0h8m-8 0V4.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </a>
-        </div>
-        ` : ''}
-
-        <div class="drawer-section">
-            <div class="drawer-section-title">F-01 Archetype</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px;">
-                <div style="background:var(--surface-2,#f5f5f5);padding:10px;border-radius:6px;">
-                    <div style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Format</div>
-                    <div style="font-size:13px;font-weight:600;margin-bottom:5px;">${clinic.clinic_format || 'Unclassified'}</div>
-                    ${confidenceChip(clinic.Format_Confidence)}
-                </div>
-                <div style="background:var(--surface-2,#f5f5f5);padding:10px;border-radius:6px;">
-                    <div style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Billing</div>
-                    <div style="font-size:13px;font-weight:600;margin-bottom:5px;">${clinic['Billing Type'] || 'Unclassified'}</div>
-                    ${confidenceChip(clinic.Billing_Confidence)}
-                </div>
-                <div style="background:var(--surface-2,#f5f5f5);padding:10px;border-radius:6px;">
-                    <div style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Ownership</div>
-                    <div style="font-size:13px;font-weight:600;margin-bottom:5px;">${clinic.ownership || 'Unclassified'}</div>
-                    <span style="background:#4CAF50;color:white;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;">verified</span>
-                </div>
-            </div>
-            <div style="font-size:10px;color:var(--muted);margin-top:8px;">high = green &nbsp;·&nbsp; medium = amber &nbsp;·&nbsp; low = grey</div>
-        </div>
-
-        <div class="drawer-section">
-            <div class="drawer-section-title">GP Team</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px;">
-                <div style="background:var(--surface-2,#f5f5f5);padding:10px;border-radius:6px;">
-                    <div style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Headcount</div>
-                    <div style="font-size:16px;font-weight:600;color:var(--sage-deep);">${clinic.gp_count ? clinic.gp_count : '—'}</div>
-                    <div style="font-size:9px;color:var(--muted);margin-top:2px;">GPs identified</div>
-                </div>
-                <div style="background:var(--surface-2,#f5f5f5);padding:10px;border-radius:6px;">
-                    <div style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">
-                        Est. Effective Capacity
-                    </div>
-                    ${(() => {
-                        const cap = clinic.adjusted_gp_capacity;
-                        const factor = clinic._gpAdjustmentFactor;
-                        const level  = clinic._gpAdjustmentLevel;
-                        if (cap == null) return '<div style="font-size:16px;font-weight:600;color:var(--sage);">—</div><div style="font-size:9px;color:var(--muted);margin-top:2px;">No headcount data</div>';
-                        const imputed = clinic._gpImputed;
-                        const valStr  = cap.toFixed(1);
-                        const levelLabel = level === 'sa3' ? 'SA3 estimate' : level === 'chain' ? clinic['Corporate Chain'] + ' chain avg' : level === 'group' ? 'group avg' : 'corpus avg';
-                        return `
-                            <div style="font-size:16px;font-weight:600;color:var(--sage);${imputed ? 'font-style:italic;opacity:0.75' : ''}">${valStr}${imputed ? '<sup style="font-size:9px;margin-left:2px;color:var(--muted)">est</sup>' : ''}</div>
-                            <div style="font-size:9px;color:var(--muted);margin-top:2px;">× ${factor?.toFixed(3)} · ${levelLabel}</div>
-                        `;
-                    })()}
-                </div>
-            </div>
-            <div style="font-size:9px;color:var(--muted);margin-top:8px;font-style:italic;">
-                ${clinic.ownership === 'Corporate'
-                    ? (clinic.gp_count
-                        ? `Headcount adjusted for multi-site GP sharing. Factor reflects avg clinics per GP in this segment.`
-                        : `Headcount data unavailable — capacity imputed from chain segment median.`)
-                    : 'Effective capacity estimate applies to corporate clinics only.'}
-            </div>
-        </div>
-
-        <div class="drawer-section">
-            <div class="drawer-section-title">Data source</div>
-            <div style="font-size:11px;color:var(--text-secondary);line-height:1.7;">
-                Format &amp; Billing — web scrape + keyword heuristics<br>
-                Ownership — website signals + NHSD registry reconciled<br>
-                GP Headcount — clinic website scrape (Doctor Names)<br>
-                Effective Capacity — multi-site adjustment model (see Methodology)<br>
-                <span style="color:var(--muted);">See Methodology for full classification logic</span>
-            </div>
-        </div>
-    `;
-
-    // Attach event listener to "View Catchment" button
-    const viewCatchmentBtn = document.getElementById('view-catchment-btn');
-    if (viewCatchmentBtn) {
-        viewCatchmentBtn.onclick = () => {
-            loadAndShowIsochroneFromDrawer(clinic.clinic_id);
-        };
-    }
-
-    // Scroll drawer body to top
-    drawerBody.scrollTop = 0;
-    document.getElementById('detail-drawer').scrollTop = 0;
-}
-
-function clinicSearchGoto(clinicId) {
-    // Find the clinic by clinic_id
-    const clinic = State.clinicsData.find(c => String(c.clinic_id) === String(clinicId));
-    if (!clinic) {
-        console.warn('Clinic not found:', clinicId);
-        return;
-    }
-
-    // Close search results and collapse the rail on mobile
-    const clinicSearchResults = document.getElementById('clinic-search-results');
-    if (clinicSearchResults) clinicSearchResults.style.display = 'none';
-    document.getElementById('map-rail')?.classList.remove('open');
-
-    // Render clinic drawer and open it
-    renderClinicDrawer(clinic);
-    document.getElementById('detail-drawer').classList.add('active');
-    if (isMobile()) showBackdrop();
-
-    // Center map on clinic
-    const lng = parseFloat(clinic.longitude);
-    const lat = parseFloat(clinic.latitude);
-    if (!isNaN(lng) && !isNaN(lat)) {
-        map.flyTo({ center: [lng, lat], zoom: 13, duration: 800 });
-    }
-}
-
 // ============================================================
 // Mobile sheet helpers
 // ============================================================
@@ -3688,14 +3532,6 @@ function closeRail() {
 // Drawer rendering
 // ============================================================
 function renderDrawer(feature) {
-    // The drawer element is shared between region and clinic content
-    // (renderClinicDrawer below) -- a region render always means the
-    // clinic that might previously have been showing is no longer in
-    // view. State.currentClinicId is Copilot.currentFocus()'s only way
-    // to tell "region drawer open" from "clinic drawer open" (they share
-    // one DOM shell), so it must be cleared here, not just set on the
-    // clinic side.
-    State.currentClinicId = null;
     const p = feature.properties;
     const tier = parseInt(p.Tier);
     const tierColor = TIER_COLORS[tier];
@@ -7431,9 +7267,7 @@ function searchGotoClinic(clinicId) {
     const clinic = State.clinicsData.find(c => String(c.clinic_id) === String(clinicId));
     if (clinic && map) {
         map.flyTo({ center: [parseFloat(clinic.longitude), parseFloat(clinic.latitude)], zoom: 13, duration: 600 });
-        renderClinicDrawer(clinic);
-        document.getElementById('detail-drawer').classList.add('active');
-        if (isMobile()) showBackdrop();
+        loadAndShowIsochrone(clinic);
     }
 }
 
@@ -7497,12 +7331,6 @@ window.searchGotoChain = searchGotoChain;
 // ============================================================
 // Isochrone Visualization & Comparison
 // ============================================================
-
-function loadAndShowIsochroneFromDrawer(clinicId) {
-    const clinic = State.clinicsData.find(c => c.clinic_id === clinicId);
-    if (!clinic) return;
-    loadAndShowIsochrone(clinic);
-}
 
 async function loadAndShowIsochrone(clinic) {
     try {
