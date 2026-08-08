@@ -8557,7 +8557,7 @@ function renderSingleClinicRail() {
                 <div class="rd-header-text">
                     <div class="rd-eyebrow">Clinic · ${sa3Name}${clinic.state_code ? ', ' + clinic.state_code : ''}</div>
                     <div class="rd-title">${clinic.clinic_name}</div>
-                    <div class="rd-sub">${clinic.address || ''} · ${clinic.website || ''}</div>
+                    <div class="rd-sub">${clinic.address || ''}${clinic.address && clinic.website ? ' · ' : ''}${clinic.website ? `<a href="${clinic.website}" target="_blank" rel="noopener noreferrer" class="rd-website-link">${clinic.website}</a>` : ''}</div>
                 </div>
                 <div class="rd-header-actions">
                     <button class="rd-close" onclick="clearAllIsochrones()" aria-label="Close">✕</button>
