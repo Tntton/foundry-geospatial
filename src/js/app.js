@@ -7267,6 +7267,21 @@ function searchGotoClinic(clinicId) {
     const clinic = State.clinicsData.find(c => String(c.clinic_id) === String(clinicId));
     if (clinic && map) {
         map.flyTo({ center: [parseFloat(clinic.longitude), parseFloat(clinic.latitude)], zoom: 13, duration: 600 });
+        // Jumping to a NAMED clinic (search dropdown or an Ask Foundry
+        // deep-link) always means "show me this one," never "add it to a
+        // comparison" -- loadAndShowIsochrone() otherwise treats any
+        // second call while one clinic is already selected as building a
+        // 2-clinic comparison (the deliberate behavior for clicking a
+        // second pin directly on the map via selectClinic()), which would
+        // silently leave the panel showing/mixing in a stale prior clinic
+        // instead of replacing it with this one.
+        if (State.selectedClinics.length) {
+            clearAllIsochroneLayers();
+            State.selectedClinics = [];
+            State.comparisonIsochrones = {};
+            State.activeClinicId = null;
+            State.activeClinicIsochrone = null;
+        }
         loadAndShowIsochrone(clinic);
     }
 }
