@@ -116,6 +116,7 @@ const State = {
     activeClinicIsochrone: null,
     selectedClinics: [],
     comparisonIsochrones: {},
+    compareModeArmed: false, // set by the "+ compare" button -- see armCompareMode()/loadAndShowIsochrone()
     acquisitionReads: {},   // clinic_id -> { phase: 'idle'|'loading'|'result', collapsed } -- Q&A lives in Copilot.messages now, not here
     regionReads: {}         // SA3Code  -> { phase: 'idle'|'loading'|'result' }
 };
@@ -7268,20 +7269,10 @@ function searchGotoClinic(clinicId) {
     if (clinic && map) {
         map.flyTo({ center: [parseFloat(clinic.longitude), parseFloat(clinic.latitude)], zoom: 13, duration: 600 });
         // Jumping to a NAMED clinic (search dropdown or an Ask Foundry
-        // deep-link) always means "show me this one," never "add it to a
-        // comparison" -- loadAndShowIsochrone() otherwise treats any
-        // second call while one clinic is already selected as building a
-        // 2-clinic comparison (the deliberate behavior for clicking a
-        // second pin directly on the map via selectClinic()), which would
-        // silently leave the panel showing/mixing in a stale prior clinic
-        // instead of replacing it with this one.
-        if (State.selectedClinics.length) {
-            clearAllIsochroneLayers();
-            State.selectedClinics = [];
-            State.comparisonIsochrones = {};
-            State.activeClinicId = null;
-            State.activeClinicIsochrone = null;
-        }
+        // deep-link) always means "show me this one" -- loadAndShowIsochrone()
+        // only ever builds a comparison when compareModeArmed was set via
+        // the "+ compare" button, which this path never does, so it always
+        // lands on a fresh single-clinic replace.
         loadAndShowIsochrone(clinic);
     }
 }
@@ -7360,10 +7351,35 @@ async function loadAndShowIsochrone(clinic) {
             console.warn(`[loadAndShowIsochrone] Isochrone not available for ${clinic.clinic_name} (${clinic.clinic_id}) in ${market} market`);
         }
 
-        // Check if we already have a comparison clinic
-        console.log('[loadAndShowIsochrone] Before state update - selectedClinics.length:', State.selectedClinics.length);
-        if (State.selectedClinics.length === 0) {
-            console.log('[loadAndShowIsochrone] Setting up SINGLE clinic selection');
+        // A comparison only ever builds when the user explicitly armed it
+        // via the "+ compare" button while exactly one clinic was already
+        // showing (see armCompareMode()). Any other click -- nothing
+        // selected yet, not armed, or a stale 2-clinic comparison already
+        // on screen -- always means "show me just this one," matching
+        // searchGotoClinic()'s deep-link/search behavior.
+        console.log('[loadAndShowIsochrone] Before state update - selectedClinics.length:', State.selectedClinics.length, 'compareModeArmed:', State.compareModeArmed);
+        if (State.compareModeArmed && State.selectedClinics.length === 1) {
+            console.log('[loadAndShowIsochrone] Setting up COMPARISON (armed 2nd clinic)');
+            // Store first clinic's data in comparison isochrones before overwriting activeClinicIsochrone
+            const firstClinic = State.selectedClinics[0];
+            if (State.activeClinicIsochrone) {
+                State.comparisonIsochrones[firstClinic.clinic_id] = State.activeClinicIsochrone;
+            }
+
+            // Now update for second clinic
+            State.activeClinicId = clinic.clinic_id;
+            State.activeClinicIsochrone = iso;
+            State.selectedClinics.push(clinic);
+            State.compareModeArmed = false;
+            if (iso) {
+                State.comparisonIsochrones[clinic.clinic_id] = iso;
+                renderComparisonIsochrones();
+            }
+            renderCatchmentAnalyticsPanel();
+        } else {
+            console.log('[loadAndShowIsochrone] Setting up SINGLE clinic selection (replacing any prior selection)');
+            if (State.selectedClinics.length) clearAllIsochroneLayers();
+            State.compareModeArmed = false;
             State.activeClinicId = clinic.clinic_id;
             State.activeClinicIsochrone = iso;
             State.selectedClinics = [clinic];
@@ -7375,33 +7391,28 @@ async function loadAndShowIsochrone(clinic) {
                 addMarkerLayersOnTop(clinic);
                 console.log('[loadAndShowIsochrone] Calling renderCatchmentAnalyticsPanel for single');
                 renderCatchmentAnalyticsPanel();
-                showToast('Clinic selected — click a second clinic on the map to compare');
+                showToast('Clinic selected — click "+ Compare" then another clinic to compare it');
             } else {
                 renderCatchmentAnalyticsPanel();
                 showToast('Clinic selected (catchment data not available for this market)');
             }
-        } else if (State.selectedClinics.length === 1) {
-            console.log('[loadAndShowIsochrone] Setting up COMPARISON (2nd clinic)');
-            // Store first clinic's data in comparison isochrones before overwriting activeClinicIsochrone
-            const firstClinic = State.selectedClinics[0];
-            if (State.activeClinicIsochrone) {
-                State.comparisonIsochrones[firstClinic.clinic_id] = State.activeClinicIsochrone;
-            }
-
-            // Now update for second clinic
-            State.activeClinicId = clinic.clinic_id;
-            State.activeClinicIsochrone = iso;
-            State.selectedClinics.push(clinic);
-            if (iso) {
-                State.comparisonIsochrones[clinic.clinic_id] = iso;
-                renderComparisonIsochrones();
-            }
-            renderCatchmentAnalyticsPanel();
         }
     } catch (e) {
         console.error('Error loading isochrone:', e);
         showToast(`Catchment data unavailable: ${e.message}`);
     }
+}
+
+// Toggled by the "+ compare" button in the single-clinic rail
+// (renderSingleClinicRail()/its mobile branch) -- arms/disarms whether the
+// NEXT clinic pin clicked builds a 2-clinic comparison or just replaces
+// the current selection (the default). Only meaningful while exactly one
+// clinic is selected; re-renders the same panel so the button's own
+// label/style can reflect the new armed state immediately.
+function armCompareMode() {
+    if (State.selectedClinics.length !== 1) return;
+    State.compareModeArmed = !State.compareModeArmed;
+    renderCatchmentAnalyticsPanel();
 }
 
 function renderActiveClinicIsochrone(clinic, iso) {
@@ -8526,9 +8537,9 @@ function renderSingleClinicRail() {
                 </div>
 
                 <!-- Compare Prompt -->
-                <div style="background: var(--sage-wash); padding: 8px; border-radius: 4px; text-align: center; font-size: 12px; color: var(--ink);">
-                    <span style="font-weight: 600;">+</span> Click another clinic to compare
-                </div>
+                <button type="button" onclick="armCompareMode()" aria-pressed="${State.compareModeArmed}" style="width:100%; border:none; cursor:pointer; font:inherit; background: ${State.compareModeArmed ? 'var(--sage-deep)' : 'var(--sage-wash)'}; color: ${State.compareModeArmed ? '#fff' : 'var(--ink)'}; padding: 8px; border-radius: 4px; text-align: center; font-size: 12px;">
+                    <span style="font-weight: 600;">${State.compareModeArmed ? '✓' : '+'}</span> ${State.compareModeArmed ? 'Now tap a clinic to compare — tap to cancel' : 'Compare with another clinic'}
+                </button>
             </div>
         `;
         panel.classList.remove('hidden');
@@ -8656,10 +8667,10 @@ function renderSingleClinicRail() {
         </div>
 
             <!-- Compare prompt -->
-            <div class="rd-compare-prompt">
-                <span class="rd-compare-icon">+</span>
-                <span>Click another clinic on the map to compare</span>
-            </div>
+            <button type="button" class="rd-compare-prompt${State.compareModeArmed ? ' rd-compare-prompt-armed' : ''}" onclick="armCompareMode()" aria-pressed="${State.compareModeArmed}">
+                <span class="rd-compare-icon">${State.compareModeArmed ? '✓' : '+'}</span>
+                <span>${State.compareModeArmed ? 'Now click a clinic on the map to compare — click here to cancel' : 'Compare with another clinic'}</span>
+            </button>
         </div>
     `;
     panel.classList.remove('hidden');
@@ -8944,6 +8955,7 @@ function clearAllIsochrones() {
     State.activeClinicIsochrone = null;
     State.selectedClinics = [];
     State.comparisonIsochrones = {};
+    State.compareModeArmed = false;
 
     clearAllIsochroneLayers();
 
