@@ -109,10 +109,12 @@ function buildSystemPrompt(gazetteer, stateJson) {
         `instead of guessing. State-change tools (set_scoring_market, toggle_clinic_layer, set_geography_filter, ` +
         `load_catalogue_dataset, set_ground_filter, set_colour_by_lens, focus_on_region, focus_on_clinic) only ever ` +
         `stage a change — call them when the user is asking you to change what's shown, not just answer a question. ` +
-        `search_web searches the public internet — use it only for general context this app's database doesn't ` +
-        `track (industry news, regulatory background, general healthcare/demographic context); never use it to ` +
-        `answer a question about this app's own regions/clinics/scores, which must always come from the read-only ` +
-        `tools above.\n\n` +
+        `search_web searches the public internet. Use it for general context this app's database doesn't track ` +
+        `(industry news, regulatory background, general healthcare/demographic context), AND for idiosyncratic ` +
+        `color on one specific clinic/region the user is asking to be told about (what its own site emphasizes, ` +
+        `notable local mentions, reputation notes) -- but never for a structured/numeric fact this app tracks ` +
+        `itself (ownership, GP count, composite/supply/demand scores, ratings, billing type), which must always ` +
+        `come from the read-only tools above.\n\n` +
         `## Ground rules\n` +
         `- Query before propose: never call focus_on_region/focus_on_clinic, or put a regionName into ` +
         `set_geography_filter, unless that exact sa3Code/clinicId/regionName already came back from a read tool ` +
@@ -126,6 +128,12 @@ function buildSystemPrompt(gazetteer, stateJson) {
         `search returns, but always attribute it plainly (e.g. "From a web search:") so the user can tell this ` +
         `app's own data apart from outside context. Never blend the two into one unattributed claim, and never use ` +
         `a web result to override or fill in a figure this app is supposed to track itself.\n` +
+        `- When a user asks to be told about one specific clinic/region by name (e.g. "tell me about X"), call the ` +
+        `matching read tool (query_clinics/query_sa3_regions/resolve_gazetteer_region) AND search_web in the SAME ` +
+        `turn -- the search doesn't depend on the DB result once you already have the name, so calling both ` +
+        `together costs one round-trip, not two. If the search comes back thin or generic (common for small ` +
+        `independent clinics with little web presence), say plainly that nothing distinctive turned up rather than ` +
+        `padding the answer with filler to sound complete.\n` +
         `- This app's own data always outranks search_web when the two disagree. If a web result contradicts a ` +
         `read-only tool result (e.g. a clinic count, a chain's footprint, a demographic figure this app tracks), ` +
         `state the app's own figure as the answer, and only mention the web figure as a flagged discrepancy (e.g. ` +
@@ -527,7 +535,13 @@ function buildTools(grounded, planSteps, skipped) {
         // string is routed to). Never touches `grounded` -- web results
         // don't produce sa3/clinic/chain ids, so there's nothing for the
         // deep-link/mutation-tool grounding checks to track here.
-        search_web: gateway.tools.perplexitySearch({ maxResults: 5 })
+        //
+        // Trimmed down from the default (10 results, 2048 tokens/page,
+        // 25000 tokens total) -- this is meant for a quick, idiosyncratic
+        // detail or two, not deep multi-page research, and every extra
+        // result/token here directly adds to how long this one call takes
+        // and how much the model has to read before it can answer.
+        search_web: gateway.tools.perplexitySearch({ maxResults: 3, maxTokensPerPage: 512, maxTokens: 4000 })
     };
 }
 
