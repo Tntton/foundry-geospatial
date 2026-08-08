@@ -6332,16 +6332,29 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
     display: flex;
     align-items: center;
     gap: 10px;
+    width: 100%;
     padding: 14px 20px;
     background: var(--sage-wash, #F2F5F0);
+    border: none;
     border-top: 1px solid var(--hairline);
+    font: inherit;
     font-size: 12px;
     font-weight: 600;
     color: var(--sage-deep, #465E4D);
+    text-align: left;
     position: sticky;
     bottom: 0;
-    cursor: default;
+    cursor: pointer;
 }
+.rd-compare-prompt:hover { background: var(--sage-tint, #E8EFE9); }
+/* Armed: waiting for the next clinic pin click to build the comparison --
+   click again to cancel (see armCompareMode()/loadAndShowIsochrone() in
+   app.js). */
+.rd-compare-prompt-armed, .rd-compare-prompt-armed:hover {
+    background: var(--sage-deep, #465E4D);
+    color: #fff;
+}
+.rd-compare-prompt-armed .rd-compare-icon { background: #fff; color: var(--sage-deep, #465E4D); }
 .rd-compare-icon {
     width: 22px;
     height: 22px;
