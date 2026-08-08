@@ -521,6 +521,54 @@ select market_id, field,
 from clinic_data_coverage
 group by market_id, field;
 
+-- GP count data-integrity remediation, Phase 0 -- a "is this field populated"
+-- view (clinic_data_coverage above) says nothing about whether a populated
+-- value is actually correct. The original scraper (archive/old-scripts/
+-- scrape_clinics_full.py's extract_doctor_names()) hard-caps its output at
+-- doctor_names[:5], so any clinic with 6+ real GPs is mathematically
+-- guaranteed to be undercounted -- a zero-rescrape, purely structural signal
+-- we can compute today. doctor_names is confirmed comma-separated free text
+-- (the same format src/js/app.js's computeGpAdjustmentFactors already parses
+-- via raw.split(',')), so splitting on ',' here is a direct, safe reuse of
+-- the existing format, not a new parsing convention.
+--
+-- Kept as its own view rather than folded into clinic_data_coverage: that
+-- view answers "is it on file at all," this one answers "should you trust
+-- the value that is on file" -- different questions, and conflating them
+-- would make clinic_data_coverage's pct_populated numbers ambiguous about
+-- which thing they're measuring.
+create or replace view clinic_gp_count_reliability as
+select
+  clinic_id, market_id, sa3_code, gp_count, doctor_names,
+  case
+    when doctor_names is null then 'no_data'
+    when array_length(regexp_split_to_array(trim(doctor_names), '\s*,\s*'), 1) = 5 then 'likely_undercount'
+    else 'unverified'
+  end as gp_count_reliability
+from clinics
+where market_id = 'gp';
+
+-- Phase 1 -- real provenance, so this can't recur silently the way it did
+-- the first time (several independent per-chain scrapers were merged by
+-- enrich_billing_and_gp.py with no retained record of which value "won").
+-- gp_count_confidence mirrors the existing format_confidence column's plain-
+-- string convention (see clinics table definition above) rather than
+-- inventing a new value-encoding scheme for confidence fields.
+alter table clinics add column if not exists gp_count_last_scraped_at timestamptz;
+alter table clinics add column if not exists gp_count_source_url text;
+alter table clinics add column if not exists gp_count_confidence text; -- 'high' | 'unverified' | 'low' -- null means "not yet assessed", never defaulted to 'high'
+
+-- Backfill: only the *provably* wrong subset gets flagged 'low' today.
+-- Everything else stays null (not yet assessed) rather than being assumed
+-- 'high' -- absence of the cap signal is not proof of correctness, only the
+-- Phase 3 audit or a real Phase 4 re-scrape can earn a 'high'/'low' verdict
+-- for the 'unverified' rows.
+update clinics set gp_count_confidence = 'low'
+from clinic_gp_count_reliability r
+where clinics.clinic_id = r.clinic_id
+  and clinics.market_id = r.market_id
+  and r.gp_count_reliability = 'likely_undercount';
+
 -- Comprehensive national gazetteer expansion (follow-up to Gap 1). Every ABS SA4
 -- becomes its own gazetteer entry under its real, official name -- not a judgment
 -- call, purely mechanical: sa3 has no sa4_code column at all, so even a single-SA4

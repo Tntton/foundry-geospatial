@@ -104,7 +104,8 @@ function buildSystemPrompt(gazetteer, stateJson) {
         `like every other action in this app.\n\n` +
         `## Tools\n` +
         `You have three kinds of tools. Read-only tools (resolve_gazetteer_region, query_sa3_regions, query_clinics, ` +
-        `summarize_clinic_chain, query_data_coverage, query_gp_billing) query the real database directly and return ` +
+        `summarize_clinic_chain, query_data_coverage, query_gp_count_reliability, query_gp_billing) query the real ` +
+        `database directly and return ` +
         `real rows — use them freely, including multiple calls in one turn, to actually answer analytical questions ` +
         `instead of guessing. State-change tools (set_scoring_market, toggle_clinic_layer, set_geography_filter, ` +
         `load_catalogue_dataset, set_ground_filter, set_colour_by_lens, focus_on_region, focus_on_clinic) only ever ` +
@@ -154,6 +155,10 @@ function buildSystemPrompt(gazetteer, stateJson) {
         `- Before claiming a field/dataset "isn't available" or the data "is too sparse to trust" for a market, call ` +
         `query_data_coverage and use its real numbers -- don't assume from the field's name alone. A market can also ` +
         `have literally zero clinics on file (check totalMatches/coverage before describing a market's data at all).\n` +
+        `- gp_count is known to be undercounted for some clinics (the original scrape caps at 5 names). Before stating ` +
+        `a specific GP clinic's gp_count as settled fact, call query_gp_count_reliability -- if that clinic's ` +
+        `gp_count_reliability is "likely_undercount", say so plainly (e.g. "recorded as N, but this likely ` +
+        `undercounts -- the source scrape caps at 5") rather than presenting the number as certain.\n` +
         `- When you need several independent lookups (e.g. comparing multiple named regions, or a region's data plus ` +
         `its clinics), call all of them in the SAME turn rather than one at a time across separate turns -- tool ` +
         `calls made together in one turn run concurrently and cost far less time than spreading them across ` +
@@ -386,6 +391,37 @@ function buildTools(grounded, planSteps, skipped) {
                 if (args.field) params.push(['field', `eq.${args.field}`]);
                 const rows = await supabaseSelect('clinic_data_coverage_by_market', params);
                 return { rows, scope: 'market-wide', noDataAtAllForMarket: rows.length === 0 };
+            }
+        }),
+
+        query_gp_count_reliability: tool({
+            description: 'Check whether GP-market clinics\' gp_count is likely trustworthy for a region -- distinct ' +
+                'from query_data_coverage, which only checks whether the field is populated at all. The original ' +
+                'scrape hard-caps doctor_names at 5 names, so any clinic hitting that cap is very likely undercounted ' +
+                '(flagged here as gp_count_reliability:"likely_undercount"). Call this before stating a specific GP ' +
+                'clinic\'s gp_count as a hard fact, or before summarizing GP headcount trustworthiness for a region.',
+            inputSchema: z.object({
+                sa3Code: z.string().optional(),
+                regionName: z.string().optional(),
+                clinicId: z.string().optional()
+            }),
+            execute: async (args) => {
+                const params = [
+                    ['select', 'clinic_id,sa3_code,gp_count,gp_count_reliability']
+                ];
+                if (args.clinicId) {
+                    params.push(['clinic_id', `eq.${args.clinicId}`]);
+                } else {
+                    let sa3Codes = args.sa3Code ? [args.sa3Code] : (args.regionName ? await fetchGazetteerMembers(args.regionName) : null);
+                    if (args.regionName && !sa3Codes?.length) {
+                        return { rows: [], note: 'regionName did not resolve -- call resolve_gazetteer_region first.' };
+                    }
+                    if (sa3Codes?.length) params.push(['sa3_code', `in.(${sa3Codes.join(',')})`]);
+                }
+                params.push(['limit', '200']);
+                const rows = await supabaseSelect('clinic_gp_count_reliability', params);
+                const likelyUndercountCount = rows.filter((r) => r.gp_count_reliability === 'likely_undercount').length;
+                return { rows, returned: rows.length, likelyUndercountCount };
             }
         }),
 
