@@ -5472,6 +5472,9 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
     margin-top: 4px;
     line-height: 1.1;
 }
+.rd-website-link { color: #0066cc; text-decoration: underline; }
+.rd-website-link:hover { color: #0052a3; }
+
 .rd-sub {
     font-size: 12px;
     color: var(--muted);
