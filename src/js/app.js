@@ -620,6 +620,7 @@ const LEGACY_COLUMN_MAP = {
         geographic_area_class: row.geographic_area_class,
         geographic_source_date: row.geographic_source_date,
         Format_Confidence: row.format_confidence,
+        gp_count_confidence: row.gp_count_confidence,
     }),
     physio: (row) => ({
         PracticeID: row.clinic_id,
@@ -8618,7 +8619,11 @@ function renderSingleClinicRail() {
                     </div>
                 </div>
                 ${State.markets.current === 'gp' ? `<div class="rd-team">
-                    <div class="team-cell"><div class="team-v">${clinic.gp_count || 0}</div><div class="team-l">GPs identified</div></div>
+                    <div class="team-cell">
+                        <div class="team-v">${clinic.gp_count || 0}</div>
+                        <div class="team-l">GPs identified</div>
+                        ${clinic.gp_count_confidence === 'low' ? `<span class="arch-warning" title="This clinic's GP count hit the original scrape's 5-name cap and is very likely undercounted.">⚠ possible undercount</span>` : ''}
+                    </div>
                     <div class="team-cell"><div class="team-v">${(clinic.gp_count * 0.75).toFixed(1)}</div><div class="team-l">Est GP FTE · ×0.75</div></div>
                 </div>` : ''}
             </div>

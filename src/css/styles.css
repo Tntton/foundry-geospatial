@@ -5835,6 +5835,22 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
     padding: 1px 6px;
     border-radius: 2px;
 }
+/* GP count data-integrity flag -- same shape as .arch-verified but a
+   warning tone, for clinics whose gp_count hit the original scraper's
+   5-name cap and is very likely undercounted (gp_count_confidence:'low'). */
+.arch-warning {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #92400E;
+    background: #FEF3C7;
+    padding: 1px 6px;
+    border-radius: 2px;
+}
 
 /* GP team stats */
 .rd-team {
