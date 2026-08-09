@@ -621,6 +621,8 @@ const LEGACY_COLUMN_MAP = {
         geographic_source_date: row.geographic_source_date,
         Format_Confidence: row.format_confidence,
         gp_count_confidence: row.gp_count_confidence,
+        gp_count_source_url: row.gp_count_source_url,
+        gp_count_last_scraped_at: row.gp_count_last_scraped_at,
     }),
     physio: (row) => ({
         PracticeID: row.clinic_id,
@@ -8393,17 +8395,31 @@ function renderBasicClinicInfo(clinic) {
     `;
 }
 
-function gpConfidenceBadge(confidence) {
+function gpConfidenceBadge(clinic) {
+    const confidence = clinic.gp_count_confidence;
+    const sourceUrl = clinic.gp_count_source_url;
+    const scrapedAt = clinic.gp_count_last_scraped_at;
+
+    // Three situations, not a trust scale: Confirmed (we checked and this is
+    // what we found), Not independently checked (no data either way), or
+    // Likely inaccurate (specific evidence this number is probably wrong) --
+    // each implies a different next action, unlike a vague confidence tier.
+    if (confidence === 'high' || confidence === 'medium') {
+        const dateStr = scrapedAt
+            ? new Date(scrapedAt).toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' })
+            : '';
+        const title = sourceUrl
+            ? `Checked against the clinic's own website${dateStr ? ` on ${dateStr}` : ''} -- found ${clinic.gp_count || 0} doctor(s) listed at ${sourceUrl}.`
+            : "Independently confirmed against the clinic's own website.";
+        return `<span class="arch-verified" title="${title}">Confirmed${dateStr ? ` ${dateStr}` : ''}</span>`;
+    }
     if (confidence === 'low') {
-        return `<span class="arch-warning" title="This clinic's GP count hit the original scrape's 5-name cap and is very likely undercounted.">Low confidence</span>`;
+        const title = sourceUrl
+            ? "A recent check found a different GP count than what's recorded here -- worth reviewing directly."
+            : 'This count may reflect an earlier data-collection limitation and is possibly understated.';
+        return `<span class="arch-warning" title="${title}">Likely inaccurate</span>`;
     }
-    if (confidence === 'high') {
-        return `<span class="arch-verified" title="Verified against a real per-location doctor listing on the clinic's own website.">High confidence</span>`;
-    }
-    if (confidence === 'medium') {
-        return `<span class="arch-unverified" title="Found via a weaker match (e.g. a shared chain page or partial listing) -- not independently verified.">Medium confidence</span>`;
-    }
-    return ''; // no confidence assessed yet
+    return `<span class="arch-unverified" title="No independent check is available for this clinic's GP count yet.">Not independently checked</span>`;
 }
 
 function renderSingleClinicRail() {
@@ -8635,7 +8651,7 @@ function renderSingleClinicRail() {
                     <div class="team-cell">
                         <div class="team-v">${clinic.gp_count || 0}</div>
                         <div class="team-l">GPs identified</div>
-                        ${gpConfidenceBadge(clinic.gp_count_confidence)}
+                        ${gpConfidenceBadge(clinic)}
                     </div>
                     <div class="team-cell"><div class="team-v">${(clinic.gp_count * 0.75).toFixed(1)}</div><div class="team-l">Est GP FTE · ×0.75</div></div>
                 </div>` : ''}
