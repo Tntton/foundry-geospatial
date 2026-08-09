@@ -8395,13 +8395,13 @@ function renderBasicClinicInfo(clinic) {
 
 function gpConfidenceBadge(confidence) {
     if (confidence === 'low') {
-        return `<span class="arch-warning" title="This clinic's GP count hit the original scrape's 5-name cap and is very likely undercounted.">⚠ possible undercount</span>`;
+        return `<span class="arch-warning" title="This clinic's GP count hit the original scrape's 5-name cap and is very likely undercounted.">Low confidence</span>`;
     }
     if (confidence === 'high') {
-        return `<span class="arch-verified" title="Verified against a real per-location doctor listing on the clinic's own website.">✓ verified</span>`;
+        return `<span class="arch-verified" title="Verified against a real per-location doctor listing on the clinic's own website.">High confidence</span>`;
     }
     if (confidence === 'medium') {
-        return `<span class="arch-unverified" title="Found via a weaker match (e.g. a shared chain page or partial listing) -- not independently verified.">◐ unverified</span>`;
+        return `<span class="arch-unverified" title="Found via a weaker match (e.g. a shared chain page or partial listing) -- not independently verified.">Medium confidence</span>`;
     }
     return ''; // no confidence assessed yet
 }
