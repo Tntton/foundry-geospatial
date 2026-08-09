@@ -5851,6 +5851,22 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
     padding: 1px 6px;
     border-radius: 2px;
 }
+/* GP count medium-confidence flag -- neutral tone, sibling of .arch-verified/
+   .arch-warning, for gp_count_confidence:'medium' (a real match, but weaker --
+   e.g. a chain-pattern-reuse hit or a smaller/less-certain doctor-card grid). */
+.arch-unverified {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #475569;
+    background: #E2E8F0;
+    padding: 1px 6px;
+    border-radius: 2px;
+}
 
 /* GP team stats */
 .rd-team {

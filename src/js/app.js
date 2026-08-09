@@ -8393,6 +8393,19 @@ function renderBasicClinicInfo(clinic) {
     `;
 }
 
+function gpConfidenceBadge(confidence) {
+    if (confidence === 'low') {
+        return `<span class="arch-warning" title="This clinic's GP count hit the original scrape's 5-name cap and is very likely undercounted.">⚠ possible undercount</span>`;
+    }
+    if (confidence === 'high') {
+        return `<span class="arch-verified" title="Verified against a real per-location doctor listing on the clinic's own website.">✓ verified</span>`;
+    }
+    if (confidence === 'medium') {
+        return `<span class="arch-unverified" title="Found via a weaker match (e.g. a shared chain page or partial listing) -- not independently verified.">◐ unverified</span>`;
+    }
+    return ''; // no confidence assessed yet
+}
+
 function renderSingleClinicRail() {
     const panel = document.getElementById('comparison-panel');
     if (!panel || State.selectedClinics.length !== 1) return;
@@ -8622,7 +8635,7 @@ function renderSingleClinicRail() {
                     <div class="team-cell">
                         <div class="team-v">${clinic.gp_count || 0}</div>
                         <div class="team-l">GPs identified</div>
-                        ${clinic.gp_count_confidence === 'low' ? `<span class="arch-warning" title="This clinic's GP count hit the original scrape's 5-name cap and is very likely undercounted.">⚠ possible undercount</span>` : ''}
+                        ${gpConfidenceBadge(clinic.gp_count_confidence)}
                     </div>
                     <div class="team-cell"><div class="team-v">${(clinic.gp_count * 0.75).toFixed(1)}</div><div class="team-l">Est GP FTE · ×0.75</div></div>
                 </div>` : ''}
