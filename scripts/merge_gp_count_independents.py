@@ -63,6 +63,16 @@ DB_URL = os.environ['SUPABASE_DB_URL']
 COMPARISON_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gp_count_comparison_independents.csv')
 DISCOVERY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gp_discovery_full.csv')
 
+# The scrape pipeline's own high/medium/low is an internal extraction-quality
+# tier used to decide merge eligibility (see classify_rows below) -- it's not
+# what gets stored in Supabase. The stored gp_count_confidence column uses a
+# simpler, user-facing vocabulary: 'confirmed' (we checked and this is what we
+# found -- collapsing high+medium, since the frontend treats them identically)
+# or 'flagged' (specific reason to doubt the displayed count). null means "not
+# independently checked" and needs no write at all.
+def to_stored_confidence(scrape_tier):
+    return 'confirmed' if scrape_tier in ('high', 'medium') else 'flagged'
+
 
 def classify_rows(rows):
     fill_in, overwrite, provenance_only, no_op = [], [], [], []
@@ -117,18 +127,18 @@ def backup_and_merge(conn, fill_in, overwrite, provenance_only, corporate_ids_to
                       gp_count_last_scraped_at = %s, gp_count_confidence = %s
                where clinic_id = %s and market_id = 'gp'""",
             (int(r['gp_count_scraped']), r['doctor_names_scraped'], r['source_url'],
-             now, r['gp_count_scrape_confidence'], r['clinic_id']),
+             now, to_stored_confidence(r['gp_count_scrape_confidence']), r['clinic_id']),
         )
     for r in provenance_only:
         cur.execute(
             """update clinics set gp_count_source_url = %s, gp_count_last_scraped_at = %s,
                       gp_count_confidence = %s
                where clinic_id = %s and market_id = 'gp'""",
-            (r['source_url'], now, r['gp_count_scrape_confidence'], r['clinic_id']),
+            (r['source_url'], now, to_stored_confidence(r['gp_count_scrape_confidence']), r['clinic_id']),
         )
     if corporate_ids_to_backfill:
         cur.execute(
-            """update clinics set gp_count_confidence = 'high'
+            """update clinics set gp_count_confidence = 'confirmed'
                where market_id = 'gp' and clinic_id = any(%s) and gp_count_confidence is null""",
             (corporate_ids_to_backfill,),
         )

@@ -8404,7 +8404,7 @@ function gpConfidenceBadge(clinic) {
     // what we found), Not independently checked (no data either way), or
     // Likely inaccurate (specific evidence this number is probably wrong) --
     // each implies a different next action, unlike a vague confidence tier.
-    if (confidence === 'high' || confidence === 'medium') {
+    if (confidence === 'confirmed') {
         const dateStr = scrapedAt
             ? new Date(scrapedAt).toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' })
             : '';
@@ -8413,7 +8413,7 @@ function gpConfidenceBadge(clinic) {
             : "Independently confirmed against the clinic's own website.";
         return `<span class="arch-verified" title="${title}">Confirmed${dateStr ? ` ${dateStr}` : ''}</span>`;
     }
-    if (confidence === 'low') {
+    if (confidence === 'flagged') {
         const title = sourceUrl
             ? "A recent check found a different GP count than what's recorded here -- worth reviewing directly."
             : 'This count may reflect an earlier data-collection limitation and is possibly understated.';

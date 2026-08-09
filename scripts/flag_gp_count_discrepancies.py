@@ -10,7 +10,7 @@ staying null, which is indistinguishable client-side from "never scraped at
 all". That's wrong: these clinics DO have a specific reason to doubt the
 displayed count, unlike a clinic with zero scrape data.
 
-Writes gp_count_confidence='low' + gp_count_source_url + gp_count_last_scraped_at
+Writes gp_count_confidence='flagged' + gp_count_source_url + gp_count_last_scraped_at
 for exactly this bucket -- gp_count/doctor_names are NEVER touched here, only
 provenance/confidence, so the displayed number doesn't change, just how much
 it's trusted. The frontend (src/js/app.js gpConfidenceBadge) renders this as
@@ -21,8 +21,8 @@ Deliberately excludes:
     default "not independently checked").
   - Clinics already merged by merge_gp_count_independents.py (their
     gp_count_confidence already reflects the merge, would be regressed to
-    'low' if this script naively re-touched them -- excluded by re-checking
-    live DB state, not the stale pre-merge comparison CSV).
+    'flagged' if this script naively re-touched them -- excluded by
+    re-checking live DB state, not the stale pre-merge comparison CSV).
 
 Writes a timestamped backup CSV of every row's pre-write state before
 executing, same as merge_gp_count_independents.py. Requires SUPABASE_DB_URL
@@ -113,7 +113,7 @@ def main():
     now = datetime.now(timezone.utc)
     for r in to_flag:
         cur.execute(
-            """update clinics set gp_count_confidence = 'low', gp_count_source_url = %s,
+            """update clinics set gp_count_confidence = 'flagged', gp_count_source_url = %s,
                       gp_count_last_scraped_at = %s
                where clinic_id = %s and market_id = 'gp'""",
             (r['source_url'], now, r['clinic_id']),

@@ -1143,3 +1143,38 @@ insert into region_gazetteer_members (region_name, sa3_code) values
   ('Greater Adelaide', '40402'),
   ('Greater Adelaide', '40403')
 on conflict (region_name, sa3_code) do nothing;
+
+-- Phase 5 -- gp_count_confidence: one source of truth, plain-language values.
+--
+-- Phase 1 stored the scrape pipeline's own internal extraction-quality tier
+-- ('high'/'medium'/'low') directly in gp_count_confidence, and
+-- clinic_gp_count_reliability computed a SEPARATE signal from raw
+-- doctor_names (the "hit exactly 5 names" cap heuristic) -- two independent
+-- systems that inevitably drifted apart once the Phase 4 discover+scrape
+-- pipeline started actually writing confirmed counts (e.g. a clinic
+-- correctly marked gp_count_confidence:'high' after real verification still
+-- read gp_count_reliability:'unverified' from the view, since the view had
+-- no idea anything had changed).
+--
+-- Fix: gp_count_confidence now stores the user-facing situation directly --
+-- 'confirmed' (independently checked, collapsing the old high+medium since
+-- the frontend never distinguished them) or 'flagged' (specific reason to
+-- doubt the count -- old 'low'). null still means "not independently
+-- checked", never defaulted to a positive value. The view becomes a thin
+-- passthrough of this same column instead of a second computation, so it
+-- literally cannot disagree with the app's own badge (src/js/app.js
+-- gpConfidenceBadge) or the "Ask Foundry" assistant's query_gp_count_reliability
+-- tool (api/assistant.js) again.
+update clinics set gp_count_confidence = 'confirmed' where gp_count_confidence in ('high', 'medium');
+update clinics set gp_count_confidence = 'flagged' where gp_count_confidence = 'low';
+
+drop view if exists clinic_gp_count_reliability;
+create view clinic_gp_count_reliability as
+select
+  clinic_id, market_id, sa3_code, gp_count, doctor_names, gp_count_confidence,
+  coalesce(
+    gp_count_confidence,
+    case when doctor_names is null then 'no_data' else 'unverified' end
+  ) as gp_count_reliability
+from clinics
+where market_id = 'gp';
