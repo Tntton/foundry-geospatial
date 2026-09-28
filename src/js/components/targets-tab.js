@@ -575,8 +575,15 @@ const TP = {
   // have for most chains) treated as neutral/unknown and flagged as such
   // — not fabricated to look precise.
   // ============================================================
-  CHAIN_DOSSIER: { layer: 'gp', filter: 'all', rows: [] },
-  CATEGORY_LABELS: { platform: 'Platform', bolton: 'Bolt-on', watch: 'Watch', outofscope: 'Out of scope' },
+  CHAIN_DOSSIER: { layer: 'gp', rows: [] },
+
+  // Sage shades, darkest-first — assigned to a chain's states in descending
+  // site-count order (not a fixed per-state hue, since there's no existing
+  // categorical state palette anywhere else in the app; states beyond the
+  // 4th collapse into one grey "+N more" segment rather than adding more
+  // hues that would start looking arbitrary).
+  STATE_MIX_COLORS: ['var(--sage-deep)', 'var(--sage)', 'var(--sage-mid)', 'var(--sage-light)'],
+  TIER_MIX_COLORS: { 1: 'var(--tier-1)', 2: 'var(--tier-2)', 3: 'var(--tier-3)', 4: 'var(--tier-4)', 5: 'var(--tier-5)' },
 
   buildTierLookup() {
     const map = {};
@@ -601,25 +608,6 @@ const TP = {
     return new Set(features.map((f) => String(f.properties.SA3Code).trim()));
   },
 
-  mostCommon(arr) {
-    const counts = {};
-    arr.forEach((v) => { if (v) counts[v] = (counts[v] || 0) + 1; });
-    let best = null, bestCount = 0;
-    Object.entries(counts).forEach(([k, c]) => { if (c > bestCount) { best = k; bestCount = c; } });
-    return best;
-  },
-
-  shareOf(arr, field, value) {
-    if (!arr.length) return 0;
-    return arr.filter((c) => c[field] === value).length / arr.length;
-  },
-
-  classifyChain(score, sites) {
-    if (score < 50) return 'outofscope';
-    if (score < 62) return 'watch';
-    return sites >= 20 ? 'platform' : 'bolton';
-  },
-
   // "Corporate Chain" also carries non-entity bucket labels for clinics
   // with no identifiable owner (independents, NGOs) — these aren't real
   // acquisition targets, so the dossier excludes them rather than listing
@@ -639,43 +627,42 @@ const TP = {
       (byChain[chain] = byChain[chain] || []).push(c);
     });
 
-    const maxSites = Math.max(1, ...Object.values(byChain).map((a) => a.length));
-
     return Object.entries(byChain).map(([name, chainClinics]) => {
       const sites = chainClinics.length;
       const sliceClinics = slicePassing
         ? chainClinics.filter((c) => slicePassing.has(String(c.sa3_code || '').trim()))
         : chainClinics;
       const inSlice = sliceClinics.length;
-      const tier12Count = sliceClinics.filter((c) => {
+
+      // Full Tier 1-5 breakdown of the in-slice footprint (was Tier 1-2
+      // only) — real per-SA3 tier lookup, not derived/estimated.
+      const tierCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      sliceClinics.forEach((c) => {
         const t = tierLookup[String(c.sa3_code || '').trim()];
-        return t === 1 || t === 2;
-      }).length;
-      const tier12Pct = sliceClinics.length ? Math.round((tier12Count / sliceClinics.length) * 100) : 0;
+        if (tierCounts[t] !== undefined) tierCounts[t]++;
+      });
+      const tier12Pct = inSlice ? Math.round(((tierCounts[1] + tierCounts[2]) / inSlice) * 100) : 0;
 
-      const archetype = this.mostCommon(chainClinics.map((c) => c.clinic_format)) || 'Unknown';
-      const billing = this.mostCommon(chainClinics.map((c) => c['Billing Type'])) || 'Unknown';
-      const ownership = this.mostCommon(chainClinics.map((c) => c.ownership)) || 'Unknown';
-      const states = [...new Set(chainClinics.map((c) => c.state_code || c.State).filter(Boolean))];
+      // Full state breakdown of the chain's overall footprint (not slice-
+      // scoped, unlike tier — this answers "where does this chain operate
+      // at all", matching what the States column already meant before).
+      const stateCounts = {};
+      chainClinics.forEach((c) => {
+        const s = c.state_code || c.State;
+        if (s) stateCounts[s] = (stateCounts[s] || 0) + 1;
+      });
+      const stateEntries = Object.entries(stateCounts).sort((a, b) => b[1] - a[1]);
+      const states = stateEntries.map(([s]) => s);
 
+      // Real owner name for the ~10 major consolidators this app has
+      // hand-curated ownership data for (see PLATFORM above); every other
+      // chain honestly gets no owner shown rather than a fabricated one or
+      // the uninformative Independent/Corporate/NGO bucket (which, for a
+      // chain by definition, is always just "Corporate" — zero signal).
       const curated = this.PLATFORM.find((p) => p.name.toLowerCase() === name.toLowerCase());
-      let deliver, quality, platform, fit, deliverEstimated = false;
-      if (curated) {
-        ({ deliver, quality, platform, fit } = curated);
-      } else {
-        deliverEstimated = true;
-        deliver = 50; // no ownership-timeline data for this chain — neutral, not fabricated
-        const bulkShare = this.shareOf(chainClinics, 'Billing Type', 'Bulk');
-        const midShare = this.shareOf(chainClinics, 'clinic_format', 'Mid-format');
-        quality = tier12Pct; // real (Tier 1-2 exposure); footprint-avg-composite/billings-CAGR not computed per-chain here
-        platform = Math.min(100, Math.round((sites / maxSites) * 100));
-        fit = Math.round((bulkShare * 0.55 + midShare * 0.45) * 100);
-      }
+      const owner = curated?.owner || null;
 
-      const score = this.scoreOf({ deliver, quality, platform, fit });
-      const category = this.classifyChain(score, sites);
-
-      return { name, sites, inSlice, tier12Pct, archetype, billing, ownership, states, category, score, deliverEstimated };
+      return { name, sites, inSlice, tierCounts, tier12Pct, stateEntries, states, owner };
     }).sort((a, b) => b.sites - a.sites);
   },
 
@@ -692,22 +679,15 @@ const TP = {
     this.renderChainDossier();
   },
 
-  selectChainDossierFilter(filter) {
-    this.CHAIN_DOSSIER.filter = filter;
-    this.renderChainDossier();
-  },
-
   // Switches to the Targets subtab, ensures the named chain is actually
-  // visible (clears any active category filter that might hide it, and
-  // tries every active clinic layer if it's not in the currently-selected
-  // one), then scrolls/flashes its row -- used by
+  // visible (tries every active clinic layer if it's not in the currently-
+  // selected one), then scrolls/flashes its row -- used by
   // Copilot.followLink('chain', ...) for [[chain:ChainName|...]]-style
   // deep-link tokens (see copilot-panel.js; this replaces the old,
   // already-dead searchActivateChain() as the real target for chain
   // navigation).
   focusChainRow(chainName) {
     if (typeof focusMapSubtab === 'function') focusMapSubtab('targets');
-    this.CHAIN_DOSSIER.filter = 'all';
 
     const layers = (typeof State !== 'undefined' && State.activeClinicLayers?.length) ? State.activeClinicLayers : [this.CHAIN_DOSSIER.layer];
     const tryLayers = [this.CHAIN_DOSSIER.layer, ...layers.filter((l) => l !== this.CHAIN_DOSSIER.layer)];
@@ -753,46 +733,52 @@ const TP = {
         (totalInSlice !== totalSites ? ` inside your ${totalInSlice === totalSites ? '' : ''}slice (${totalInSlice})` : ' — nothing filtered yet');
     }
 
-    const counts = { all: rows.length, platform: 0, bolton: 0, watch: 0, outofscope: 0 };
-    rows.forEach((r) => { counts[r.category] = (counts[r.category] || 0) + 1; });
-    const chipsEl = document.getElementById('td-filter-chips');
-    if (chipsEl) {
-      const defs = [['all', 'All'], ['platform', 'Platform'], ['bolton', 'Bolt-on'], ['watch', 'Watch'], ['outofscope', 'Out of scope']];
-      chipsEl.innerHTML = defs.map(([key, label]) =>
-        `<button type="button" class="td-filter-chip${this.CHAIN_DOSSIER.filter === key ? ' active' : ''}" onclick="TP.selectChainDossierFilter('${key}')">${label} ${counts[key]}</button>`
-      ).join('');
-    }
+    // Compact segmented bar for a chain row's Tier or State breakdown —
+    // same visual language as the Step 1 archetype coverage bars
+    // (mix-bar-track/mix-bar-seg), sized down for a dense table cell. A
+    // hover title carries the exact count/pct per segment since there's no
+    // room for a full legend per row.
+    const mixBar = (segs) => {
+      const total = segs.reduce((s, [n]) => s + n, 0);
+      if (!total) return '<div class="mix-bar-track td-mix-bar-track"><div style="width:100%;background:var(--hairline)"></div></div>';
+      return `<div class="mix-bar-track td-mix-bar-track">${segs.map(([n, color, label]) => n > 0
+        ? `<div class="mix-bar-seg" style="width:${(n / total * 100)}%;background:${color}" title="${label}: ${n} (${Math.round(n / total * 100)}%)"></div>` : '').join('')}</div>`;
+    };
 
-    const filtered = this.CHAIN_DOSSIER.filter === 'all' ? rows : rows.filter((r) => r.category === this.CHAIN_DOSSIER.filter);
     const tbody = document.getElementById('td-tbody');
     if (tbody) {
-      tbody.innerHTML = filtered.length ? filtered.map((r) => `
+      tbody.innerHTML = rows.length ? rows.map((r) => {
+        const tierBar = mixBar([1, 2, 3, 4, 5].map((t) => [r.tierCounts[t], this.TIER_MIX_COLORS[t], `Tier ${t}`]));
+        const top4 = r.stateEntries.slice(0, 4);
+        const rest = r.stateEntries.slice(4);
+        const restTotal = rest.reduce((s, [, n]) => s + n, 0);
+        const stateSegs = top4.map(([s, n], i) => [n, this.STATE_MIX_COLORS[i], s]);
+        if (restTotal > 0) stateSegs.push([restTotal, '#ddd', `+${rest.length} more (${rest.map(([s]) => s).join(', ')})`]);
+        const stateBar = mixBar(stateSegs);
+        const topState = r.stateEntries[0];
+
+        return `
         <tr data-chain="${String(r.name).replace(/"/g, '&quot;')}">
             <td class="td-chain-name">${r.name}</td>
-            <td><span class="td-badge td-badge-${r.category}">${this.CATEGORY_LABELS[r.category]}</span></td>
             <td>${r.sites}</td>
             <td>${r.inSlice}</td>
             <td>
-                <div class="td-footprint-cell">
-                    <div class="td-footprint-bar"><div class="td-footprint-bar-fill" style="width:${r.tier12Pct}%"></div></div>
-                    <span>${r.tier12Pct}%</span>
+                <div class="td-mix-cell">
+                    ${tierBar}
+                    <span class="td-mix-caption">${r.tier12Pct}% T1-2</span>
                 </div>
             </td>
-            <td>${r.archetype}</td>
-            <td>${r.billing}</td>
-            <td>${r.ownership}</td>
-            <td class="td-states">${r.states.join(' ')}</td>
+            <td>${r.owner || '—'}</td>
+            <td>
+                <div class="td-mix-cell">
+                    ${stateBar}
+                    <span class="td-mix-caption">${topState ? `${topState[0]} ${topState[1]}` : '—'}</span>
+                </div>
+            </td>
         </tr>
-      `).join('') : (rows.length === 0
-          ? `<tr><td colspan="9" class="td-empty">No chain/ownership data available for this clinic layer yet.</td></tr>`
-          : `<tr><td colspan="9" class="td-empty">No chains classified into "${this.CATEGORY_LABELS[this.CHAIN_DOSSIER.filter] || 'this'}" for this layer.</td></tr>`);
+      `;
+      }).join('') : `<tr><td colspan="6" class="td-empty">No chain/ownership data available for this clinic layer yet.</td></tr>`;
     }
-
-    const anyEstimated = rows.some((r) => r.deliverEstimated);
-    const noteEl = document.getElementById('td-deliver-note');
-    if (noteEl) noteEl.textContent = anyEstimated
-      ? ' Chains without known ownership data use an estimated (neutral) deliverability score for classification — not sample/curated figures.'
-      : '';
   }
 };
 

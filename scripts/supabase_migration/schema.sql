@@ -1178,3 +1178,98 @@ select
   ) as gp_count_reliability
 from clinics
 where market_id = 'gp';
+
+-- Aged care residential homes (ACQSC provider register, one row per physical
+-- home -- not per business entity; a provider can operate several homes).
+-- Source: acqsc-provider-register.xlsx, "Residential Care Home Details"
+-- sheet, 2,933 rows, downloaded from the Aged Care Quality and Safety
+-- Commission. Feeds the "Aged-care provider locations" Data Catalogue slot
+-- (previously a placeholder marked available:false -- see CATALOGUE_CATEGORIES
+-- in app.js -- since this app had no real aged-care dataset until now).
+--
+-- Coordinates were resolved in two passes, both real, neither fabricated:
+--   1. G-NAF (the government address file) address match -- 2,724 rows
+--      (92.9%). geocode_confidence = 1.0 for these.
+--   2. The ~209 G-NAF couldn't resolve (typos, hospital/facility names
+--      instead of a street address, embedded state/postcode text, etc.)
+--      were run through Mapbox's Geocoding API as a second pass. Only
+--      results at medium-or-higher relevance (>=0.7) were kept -- 186 more
+--      rows. The ~23 that came back low/very-low confidence were left with
+--      no coordinates at all rather than accepting a wrong one: verified
+--      examples in that band included a Prospect SA address matched to a
+--      suburb 80km away, and two NT addresses matched into Victoria and
+--      Queensland respectively. geocode_source/geocode_confidence make
+--      this distinction visible per row rather than silently blending two
+--      different geocoding methods together.
+--
+-- Result: 2,910 of 2,933 homes (99.2%) have real coordinates; 23 are
+-- honestly null pending manual lookup (see the "Needs Manual Review"
+-- workbook from that session for exactly which ones and why).
+create table if not exists aged_care_providers (
+  site_id text primary key,
+  entity_name text,
+  business_name text,
+  abn text,
+  home_name text,
+  street text,
+  suburb text,
+  state text,
+  postcode text,
+  full_address text,
+  latitude numeric,
+  longitude numeric,
+  location geography(Point, 4326),
+  geocode_source text,   -- 'gnaf' | 'mapbox' | null (unresolved)
+  geocode_confidence numeric,  -- 1.0 for gnaf; Mapbox's own relevance score (0-1) for mapbox
+  sa3_code text,
+  sa3_name text
+);
+create index if not exists aged_care_providers_location_idx on aged_care_providers using gist (location);
+create index if not exists aged_care_providers_suburb_idx on aged_care_providers (suburb, state);
+
+-- sa3_code/sa3_name: real point-in-polygon join against sa3.geom, not a
+-- name/postcode guess -- matches 2,907 of 2,910 geocoded rows (the 3 misses
+-- are ordinary suburban addresses sitting right on an sa3.geom boundary
+-- seam, not a data problem with this table).
+update aged_care_providers p set
+  sa3_code = s.sa3_code,
+  sa3_name = s.sa3_name
+from sa3 s
+where p.location is not null
+  and p.sa3_code is null
+  and ST_Contains(s.geom::geometry, p.location::geometry);
+
+-- This project auto-enables RLS on new tables (confirmed live: sa3/clinics
+-- both already carry an identical "public read" policy this table didn't
+-- get automatically) -- without this, get_aged_care_providers_geojson()
+-- below silently returns zero rows to the anon key the client uses, since
+-- a plain SECURITY INVOKER function is still subject to the caller's RLS.
+create policy "public read" on aged_care_providers for select using (true);
+
+-- RPC the client fetches via supabase.rpc(...), same convention as the
+-- (pre-existing, not itself tracked in this file) get_sa3_geojson/
+-- get_sa2_geojson functions -- applied directly in Supabase, documented
+-- here for the same reason those aren't duplicated here either.
+-- CREATE OR REPLACE FUNCTION public.get_aged_care_providers_geojson()
+--  RETURNS jsonb LANGUAGE sql STABLE
+--  SET search_path TO 'public', 'extensions', 'pg_catalog'
+--  SET statement_timeout TO '30s'
+-- AS $function$
+--   select jsonb_build_object(
+--     'type', 'FeatureCollection',
+--     'features', coalesce(jsonb_agg(
+--       jsonb_build_object(
+--         'type', 'Feature',
+--         'geometry', ST_AsGeoJSON(location)::jsonb,
+--         'properties', jsonb_build_object(
+--           'SiteId', site_id, 'EntityName', entity_name, 'BusinessName', business_name,
+--           'HomeName', home_name, 'Street', street, 'Suburb', suburb, 'State', state,
+--           'Postcode', postcode, 'FullAddress', full_address, 'SA3Code', sa3_code,
+--           'SA3Name', sa3_name, 'GeocodeSource', geocode_source, 'GeocodeConfidence', geocode_confidence
+--         )
+--       )
+--     ), '[]'::jsonb)
+--   )
+--   from aged_care_providers
+--   where location is not null;
+-- $function$
