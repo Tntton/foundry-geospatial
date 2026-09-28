@@ -22,16 +22,22 @@
 // no @supabase/supabase-js dependency, no service-role key (see that
 // file's own comment for why not).
 //
-// Routed through Vercel AI Gateway, same as before — no direct Anthropic
+// Routed through Vercel AI Gateway, same as before — no direct provider
 // API key, no auth gate (same public/unauthenticated posture as every
 // other endpoint in this app).
+//
+// Model choice: gateway's free $5/month credit tier only covers a
+// restricted model subset (no Claude models in it) — anthropic/claude-sonnet-5
+// 403s with GatewayInternalServerError unless the team has purchased Gateway
+// credits (a separate, one-way switch from the Vercel Pro/hosting plan's own
+// billing). Using a free-tier-eligible model here instead of asking for that.
 
 import { streamText, tool, stepCountIs, gateway } from 'ai';
 import { z } from 'zod';
 import { supabaseSelect, supabaseSelectWithCount, fetchGazetteerNames, matchGazetteerRegion, fetchGazetteerMembers } from './_lib/supabaseRest.js';
 import { formatAnswerHtml } from './_lib/formatAnswer.js';
 
-const MODEL = 'anthropic/claude-sonnet-5';
+const MODEL = 'google/gemini-2.5-flash';
 
 // A real multi-step tool loop costs meaningfully more per request than the
 // old single generateObject call (more tokens, more model round-trips, a DB
