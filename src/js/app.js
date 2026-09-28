@@ -2728,7 +2728,7 @@ const CATALOGUE_CATEGORIES = [
                 { key: 'chainPenetration', label: 'Chain penetration by SA3', hint: 'Derived · NHSD × Foundry classification — % of clinics per SA3 belonging to an identified corporate chain (excludes independent/NGO/unclassified)', gpOnly: true, type: 'REGION' },
             ]},
             { name: 'Adjacent Providers', items: [
-                { key: 'agedCareProviders', label: 'Aged-care provider locations', hint: 'Aged Care Quality and Safety Commission · Sep 2026 — 2,910 of 2,933 registered residential homes geocoded (G-NAF + Mapbox for G-NAF misses, medium-confidence or better only)', type: 'PINS' },
+                { key: 'agedCareProviders', immediate: true, label: 'Aged-care provider locations', hint: 'Aged Care Quality and Safety Commission · Sep 2026 — 2,910 of 2,933 registered residential homes geocoded (G-NAF + Mapbox for G-NAF misses, medium-confidence or better only) — also toggleable from Step 1’s clinic layers, applies instantly, not part of "Load" below', type: 'PINS' },
             ]},
         ],
     },
@@ -2759,7 +2759,11 @@ const CATALOGUE_BUNDLES = [
 // visibility — used to reset a bundle cleanly (anything not in the bundle's
 // `loads` gets explicitly unloaded, not just left alone).
 function allCatalogueOptionalKeys() {
-    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) => s.items.filter((i) => i.key).map((i) => i.key)));
+    // Excludes immediate items (same reason layerToggle items are already
+    // excluded via not having a .key at all) -- they apply the instant
+    // you click them, never staged, so they must never count toward the
+    // Load button's "N changes staged" total.
+    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) => s.items.filter((i) => i.key && !i.immediate).map((i) => i.key)));
 }
 
 // Labels of items that are always active and genuinely feed the composite
@@ -2807,6 +2811,7 @@ function renderCatalogueNav() {
         const lockedCount = allItems.filter((i) => i.locked || (i.layerToggle && i.layerToggle === State.markets.current)).length;
         const loadedCount = allItems.filter((i) => {
             if (i.layerToggle) return i.layerToggle === State.markets.current || State.activeClinicLayers.includes(i.layerToggle);
+            if (i.immediate) return !!State.catalogueLoaded[i.key];
             return i.locked || catalogueStaged[i.key];
         }).length;
         return `
@@ -2860,6 +2865,23 @@ function renderCatalogueDetail(key) {
                             <div>
                                 <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
                                 <div class="catalogue-row-hint">${hint}</div>
+                            </div>
+                        </label>
+                    `;
+                }
+                if (i.immediate) {
+                    // Same immediate-effect convention as layerToggle above,
+                    // for items that aren't a GP/Physio/Dental clinic layer
+                    // but still apply the instant you click them (e.g. the
+                    // aged-care overlay, also toggleable from Step 1).
+                    const checked = !!State.catalogueLoaded[i.key];
+                    const badge = checked ? '<span class="catalogue-row-badge catalogue-row-badge-live">On the map now</span>' : '';
+                    return `
+                        <label class="catalogue-row">
+                            <input type="checkbox" data-key="${i.key}" ${checked ? 'checked' : ''} onchange="toggleImmediateCatalogueItem('${i.key}', this.checked)">
+                            <div>
+                                <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
+                                <div class="catalogue-row-hint">${i.hint}</div>
                             </div>
                         </label>
                     `;
@@ -3038,6 +3060,21 @@ function applyChainPenetrationToSa3Features(load) {
     if (map.getSource('sa3')) map.getSource('sa3').setData(State.sa3Data);
 }
 
+// Generic immediate-effect catalogue toggle -- for items that apply the
+// instant you click them (like layerToggle/toggleClinicLayer) but aren't a
+// GP/Physio/Dental clinic layer, so they don't belong in that market-
+// specific system. Refreshes the catalogue modal's own nav/detail too, same
+// as toggleClinicLayer does, in case it's open while Step 1's own checkbox
+// is what triggered this.
+function toggleImmediateCatalogueItem(key, checked) {
+    State.catalogueLoaded[key] = checked;
+    applyCatalogueLoadedState();
+    if (!document.getElementById('catalogue-modal-backdrop')?.classList.contains('hidden')) {
+        renderCatalogueNav();
+        renderCatalogueDetail(catalogueActiveCategory);
+    }
+}
+
 // Applies State.catalogueLoaded to the actual UI: Step 3 filter sections,
 // the dynamic Colour-by chip(s), and the GP Billings dropdown.
 function applyCatalogueLoadedState() {
@@ -3055,6 +3092,11 @@ function applyCatalogueLoadedState() {
     applyChainPenetrationToSa3Features(State.catalogueLoaded.chainPenetration);
     if (agedCareSection) agedCareSection.classList.toggle('hidden', !State.catalogueLoaded.agedCareProviders);
     if (State.catalogueLoaded.agedCareProviders) ensureAgedCareLayer(); else removeAgedCareLayer();
+    // Two entry points drive the same State.catalogueLoaded.agedCareProviders
+    // flag (this Step 1 checkbox and the catalogue's own) -- keep this one
+    // in sync regardless of which one triggered the change.
+    const agedCareStep1Toggle = document.getElementById('aged-care-layer-toggle');
+    if (agedCareStep1Toggle) agedCareStep1Toggle.checked = State.catalogueLoaded.agedCareProviders;
     if (workforceSection) workforceSection.classList.toggle('hidden', !State.catalogueLoaded.workforce);
     if (extraFilters) extraFilters.classList.toggle('hidden', !anyLoaded);
     if (groundEmpty) {

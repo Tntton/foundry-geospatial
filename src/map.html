@@ -555,6 +555,13 @@
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span class="clinic-layer-row-name">General Practice</span><span class="clinic-layer-count" id="clinic-layer-count-gp"></span></label>
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span class="clinic-layer-row-name">Physiotherapy</span><span class="clinic-layer-count" id="clinic-layer-count-physio"></span></label>
                                 <!-- Dental omitted deliberately -- 0 clinics loaded today, see comment above. -->
+                                <!-- Aged-care providers isn't a scoring market or clinic layer (no
+                                     Format/Billing/Ownership, doesn't feed the composite) -- a plain
+                                     reference overlay, so it drives State.catalogueLoaded.agedCareProviders
+                                     via toggleImmediateCatalogueItem() instead of the clinic-layer system,
+                                     even though it sits in this same checkbox group visually. Same
+                                     immediate-effect checkbox also lives in the Data Catalogue. -->
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" id="aged-care-layer-toggle" onchange="toggleImmediateCatalogueItem('agedCareProviders', this.checked)"><span class="clinic-layer-row-name">Aged Care Providers</span></label>
                             </div>
                         </div>
 
@@ -2002,7 +2009,7 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr49"></script>
+<script src="js/app.js?v=rr51"></script>
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
