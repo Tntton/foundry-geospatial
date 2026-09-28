@@ -147,6 +147,41 @@ create index if not exists clinics_location_idx on clinics using gist (location)
 create index if not exists clinics_sa3_code_idx on clinics (sa3_code);
 create index if not exists clinics_isochrone_geom_idx on clinics using gist (isochrone_geom);
 
+-- get_clinics(p_market_id) -- RPC the client fetches via supabase.rpc(...),
+-- same convention as get_sa3_geojson/get_aged_care_providers_geojson (not
+-- itself tracked in this file, applied directly in Supabase). Originally
+-- `select to_jsonb(c) - array['isochrone_geom', ...] from clinics c where
+-- market_id = p_market_id` -- to_jsonb(c) serializes the FULL row, including
+-- isochrone_geom (a MultiPolygon geography averaging ~17KB/row), before the
+-- `-` array op discards it, so every call paid to convert ~140MB of geometry
+-- to text for nothing. Confirmed via EXPLAIN ANALYZE: 9.8s execution for the
+-- physio market alone (matches the "clicking Physio takes 10s" report).
+-- Fixed by selecting only the ~50 columns the client actually uses in an
+-- inner subquery first, so the heavy geometry columns are never touched --
+-- same output shape/columns, 350ms execution (~28x).
+-- CREATE OR REPLACE FUNCTION public.get_clinics(p_market_id text)
+--  RETURNS jsonb LANGUAGE sql STABLE
+--  SET search_path TO 'public', 'pg_catalog'
+--  SET statement_timeout TO '30s'
+-- AS $function$
+--   select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb)
+--   from (
+--     select
+--       market_id, clinic_id, name, address, address1, suburb, state_code,
+--       state_name, postcode, website, phone, email, latitude, longitude,
+--       sa1_code, sa2_code, sa2_name, sa2_area_km2, sa3_code, sa3_name,
+--       sa4_code, sa4_name, gccsa_code, gccsa_name, geographic_area_class,
+--       geographic_source_date, gnaf_address_id, ownership, clinic_format,
+--       billing_type, corporate_chain, gp_count, google_review_count,
+--       google_rating, nhsd_service_id, nhsd_service_type, pathology,
+--       radiology_imaging, allied_health, doctor_names, format_confidence,
+--       ndis, telehealth, rank, segments, primary_segment, confidence,
+--       gp_count_last_scraped_at, gp_count_source_url, gp_count_confidence
+--     from clinics c
+--     where c.market_id = p_market_id
+--   ) t;
+-- $function$
+
 -- sa3_scored -> sa3 (pure rename, safe immediately; data unaffected)
 alter table if exists sa3_scored rename to sa3;
 

@@ -2185,7 +2185,9 @@ async function ensureSEIFALayer() {
 // Same lazy-fetch-once-then-toggle-visibility pattern as ensureSEIFALayer().
 async function ensureAgedCareLayer() {
     if (map.getSource('aged-care')) {
-        map.setLayoutProperty('aged-care-pins', 'visibility', 'visible');
+        ['aged-care-clusters', 'aged-care-cluster-count', 'aged-care-pins'].forEach((id) => {
+            map.setLayoutProperty(id, 'visibility', 'visible');
+        });
         return;
     }
 
@@ -2197,18 +2199,61 @@ async function ensureAgedCareLayer() {
         return;
     }
 
-    map.addSource('aged-care', { type: 'geojson', data: geojson });
-    map.addLayer({
+    // Same clustered-GeoJSON-source pattern as the GP/Physio/Dental clinic
+    // layers (buildClinicLayerSource) — without it, zooming out at national
+    // scale renders 2,900+ individual dots instead of aggregate bubbles.
+    map.addSource('aged-care', { type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50 });
+
+    addLayerSafe({
+        id: 'aged-care-clusters',
+        type: 'circle',
+        source: 'aged-care',
+        filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': '#FFC000',
+            'circle-opacity': 0.85,
+            'circle-stroke-color': '#7A5800',
+            'circle-stroke-width': 1.5,
+            'circle-radius': [
+                'step', ['get', 'point_count'],
+                12, 25, 16, 100, 20, 500, 26
+            ]
+        }
+    });
+    addLayerSafe({
+        id: 'aged-care-cluster-count',
+        type: 'symbol',
+        source: 'aged-care',
+        filter: ['has', 'point_count'],
+        layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 11,
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
+        },
+        paint: { 'text-color': '#3a2c00' }
+    });
+    addLayerSafe({
         id: 'aged-care-pins',
         type: 'circle',
         source: 'aged-care',
-        layout: { visibility: 'visible' },
+        filter: ['!', ['has', 'point_count']],
         paint: {
             'circle-radius': 4,
             'circle-color': '#FFC000',
             'circle-stroke-width': 1,
             'circle-stroke-color': '#7A5800'
         }
+    });
+
+    map.on('mouseenter', 'aged-care-clusters', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'aged-care-clusters', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'aged-care-clusters', (e) => {
+        const feature = e.features[0];
+        const clusterId = feature.properties.cluster_id;
+        map.getSource('aged-care').getClusterExpansionZoom(clusterId, (err, zoom) => {
+            if (err) return;
+            map.easeTo({ center: feature.geometry.coordinates, zoom, duration: 500 });
+        });
     });
 
     const tooltip = document.getElementById('map-tooltip');
@@ -2235,7 +2280,9 @@ async function ensureAgedCareLayer() {
 }
 
 function removeAgedCareLayer() {
-    if (map.getLayer('aged-care-pins')) map.removeLayer('aged-care-pins');
+    ['aged-care-pins', 'aged-care-cluster-count', 'aged-care-clusters'].forEach((id) => {
+        if (map.getLayer(id)) map.removeLayer(id);
+    });
     if (map.getSource('aged-care')) map.removeSource('aged-care');
 }
 
