@@ -4102,6 +4102,14 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
     border-radius: 0 2px 2px 0;
 }
 
+/* Separates composite weights from workforce risk weighting — two distinct
+   weight systems that previously ran together with no visual break. */
+.thesis-section-divider {
+    height: 1px;
+    background: var(--hairline);
+    margin: 4px 16px 8px;
+}
+
 /* Weight bars with base-case track */
 .weight-bar-wrap {
     position: relative;
@@ -7097,35 +7105,6 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
     font-size: 12px;
     color: var(--muted);
 }
-.td-filter-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 20px;
-    border-bottom: 1px solid var(--hairline);
-    flex-shrink: 0;
-}
-.td-filter-chips { display: flex; gap: 6px; }
-.td-filter-chip {
-    padding: 5px 12px;
-    font-family: var(--sans);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--muted);
-    background: var(--surface-2);
-    border: 1px solid var(--hairline);
-    border-radius: 20px;
-    cursor: pointer;
-}
-.td-filter-chip:hover { color: var(--ink); }
-.td-filter-chip.active {
-    background: var(--sage-deep);
-    color: var(--white);
-    border-color: var(--sage-deep);
-    font-weight: 600;
-}
-.td-filter-note { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .td-table-wrap { flex: 1; overflow: auto; }
 .td-table {
     width: 100%;
@@ -7156,35 +7135,9 @@ body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px);
 .td-chain-name { font-weight: 600; color: var(--ink); }
 .td-states { font-size: 11px; color: var(--muted); }
 .td-empty { text-align: center; color: var(--muted); padding: 30px !important; white-space: normal; }
-.td-badge {
-    display: inline-block;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 3px 8px;
-    border-radius: 3px;
-    white-space: nowrap;
-}
-.td-badge-platform { background: var(--sage-deep); color: var(--white); }
-.td-badge-bolton { background: var(--sage-tint); color: var(--sage-deep); }
-.td-badge-watch { background: #FFF6DD; color: #7A5800; border: 1px solid var(--warning); }
-.td-badge-outofscope { background: var(--surface-2); color: var(--muted); border: 1px solid var(--hairline); }
-.td-footprint-cell { display: flex; align-items: center; gap: 6px; min-width: 90px; }
-.td-footprint-bar {
-    width: 50px;
-    height: 6px;
-    background: var(--hairline);
-    border-radius: 3px;
-    overflow: hidden;
-}
-.td-footprint-bar-fill { height: 100%; background: var(--sage-deep); }
-.td-footnote {
-    padding: 10px 20px 14px;
-    font-size: 11px;
-    line-height: 1.6;
-    color: var(--muted);
-    border-top: 1px solid var(--hairline);
-    flex-shrink: 0;
-}
+.td-mix-cell { display: flex; align-items: center; gap: 6px; min-width: 100px; }
+.td-mix-bar-track { width: 60px; height: 8px; border-radius: 3px; overflow: hidden; flex-shrink: 0; }
+.td-mix-caption { font-size: 11px; color: var(--muted); white-space: nowrap; }
 
 /* Rail step pulse — briefly highlights which of the 4
    funnel steps the co-pilot's intent actually touched, so a typed sentence

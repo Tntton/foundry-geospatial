@@ -67,7 +67,7 @@ const State = {
     // loaded. Step 3 shows nothing but "required by the model" info by
     // default; loading one of these reveals its filter controls there and
     // (where colorable) a dynamic Colour-by chip.
-    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false },
+    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false, agedCareProviders: false },
     // "Limit regions" (plan Phase G) — SEIFA decile selection is browsable
     // without narrowing anything until this is switched on (workforce risk/
     // DPA already narrows immediately via its own pre-existing slider/
@@ -516,6 +516,13 @@ async function fetchSa2Geojson() {
     return data;
 }
 
+async function fetchAgedCareGeojson() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_aged_care_providers_geojson');
+    if (error) throw new Error(`Failed to load aged care geojson: ${error.message}`);
+    return data;
+}
+
 async function fetchMmmBenchmark() {
     const supabase = await getSupabaseClient();
     const { data, error } = await supabase.rpc('get_mmm_benchmark');
@@ -910,6 +917,65 @@ function rebuildActiveClinicsData() {
 // explicitly deferred follow-up, same spirit as the region/chain dossier —
 // this phase proves out the layering mechanic itself.
 // ============================================================
+// Step 1 "Narrow the clinics" — Format/Billing/Ownership coverage bars, so
+// the tag-rate is visible right where the filters live, not buried in
+// Methodology. Deliberately reads the *raw* format/billing fields (`format`,
+// `billing`), not the already-imputed `clinic_format`/`Billing Type` fields
+// the filter checkboxes themselves match against — clinic_format silently
+// fallback-fills an unclassified clinic to 'Small' (confirmed live: raw
+// `format` has 4690 nulls, but `clinic_format` shows 0, all folded into
+// Small), which would hide exactly the data-quality gap this bar exists to
+// show. Ownership has no equivalent raw/imputed split — every clinic always
+// gets one of Corporate/Independent/NGO (Independent is itself the default
+// when no corporate signal is found, a separate caveat already surfaced in
+// the region drawer), so there's no honest "unknown" segment to add there.
+function renderArchetypeCoverageBars() {
+    const gp = State.clinicsByVertical?.gp || [];
+    const total = gp.length;
+    if (!total) return;
+
+    const bar = (containerId, segs) => {
+        const el = document.getElementById(containerId);
+        if (!el) return;
+        const trackHtml = segs.map(([n, color]) => n > 0
+            ? `<div class="mix-bar-seg" style="width:${(n / total * 100)}%;background:${color}"></div>` : '').join('');
+        const legendHtml = segs.map(([n, color, label]) =>
+            `<span><span class="mix-bar-legend-dot" style="background:${color}"></span>${label} <strong>${Math.round(n / total * 100)}%</strong></span>`
+        ).join('');
+        el.innerHTML = `
+            <div class="mix-bar">
+                <div class="mix-bar-track archetype-bar-track">${trackHtml}</div>
+                <div class="archetype-dim-legend">${legendHtml}</div>
+            </div>
+        `;
+    };
+
+    const fmtCounts = { 'Big-box': 0, 'Mid-format': 0, Small: 0, unknown: 0 };
+    const billCounts = { 'Bulk Billing': 0, 'Mixed Billing': 0, 'Private Billing': 0, unknown: 0 };
+    gp.forEach((c) => {
+        fmtCounts[c.format in fmtCounts ? c.format : 'unknown']++;
+        billCounts[c.billing in billCounts ? c.billing : 'unknown']++;
+    });
+
+    bar('format-coverage-bar', [
+        [fmtCounts['Big-box'], 'var(--sage-deep)', 'Big-box'],
+        [fmtCounts['Mid-format'], 'var(--sage)', 'Mid'],
+        [fmtCounts.Small, 'var(--sage-mid)', 'Small'],
+        [fmtCounts.unknown, '#ddd', 'Unknown'],
+    ]);
+    bar('billing-coverage-bar', [
+        [billCounts['Bulk Billing'], 'var(--sage-light)', 'Bulk'],
+        [billCounts['Mixed Billing'], 'var(--tier-4)', 'Mixed'],
+        [billCounts['Private Billing'], 'var(--tier-5)', 'Private'],
+        [billCounts.unknown, '#ddd', 'Unknown'],
+    ]);
+    bar('ownership-coverage-bar', [
+        [gp.filter((c) => c.ownership === 'Independent').length, 'var(--own-independent)', 'Indep.'],
+        [gp.filter((c) => c.ownership === 'Corporate').length, 'var(--own-corporate)', 'Corp.'],
+        [gp.filter((c) => c.ownership === 'NGO').length, '#888', 'NGO'],
+    ]);
+}
+
 function renderClinicLayerCheckboxes() {
     document.querySelectorAll('.clinic-layer-toggle').forEach((el) => {
         const layer = el.dataset.layer;
@@ -1068,6 +1134,8 @@ async function switchMarket(marketId) {
         updateGPSpecificFilters();
         renderFunnelSummaries();  // plan Phase C
         renderClinicLayerCheckboxes();  // plan Phase E
+        renderArchetypeCoverageBars();
+        applyCatalogueLoadedState(); // was never called on initial load — Step 3's empty-state text stayed static until first modal interaction
         renderClinicLayerLegend();  // plan Phase F
         renderCatalogueLensChips();  // plan Phase G — re-sync dynamic SEIFA chip across market switch
 
@@ -2110,6 +2178,67 @@ async function ensureSEIFALayer() {
     applySeifaFilter();
 }
 
+// Aged-care provider pins (Data Catalogue, Competition > Adjacent Providers)
+// — a plain reference overlay, not a scoring market or a clinic layer, so it
+// deliberately doesn't touch State.activeClinicLayers/clinicsByVertical
+// (that machinery is specifically for the GP/Physio/Dental market concept).
+// Same lazy-fetch-once-then-toggle-visibility pattern as ensureSEIFALayer().
+async function ensureAgedCareLayer() {
+    if (map.getSource('aged-care')) {
+        map.setLayoutProperty('aged-care-pins', 'visibility', 'visible');
+        return;
+    }
+
+    let geojson;
+    try {
+        geojson = await fetchAgedCareGeojson();
+    } catch (e) {
+        console.warn('aged care geojson load failed:', e);
+        return;
+    }
+
+    map.addSource('aged-care', { type: 'geojson', data: geojson });
+    map.addLayer({
+        id: 'aged-care-pins',
+        type: 'circle',
+        source: 'aged-care',
+        layout: { visibility: 'visible' },
+        paint: {
+            'circle-radius': 4,
+            'circle-color': '#FFC000',
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#7A5800'
+        }
+    });
+
+    const tooltip = document.getElementById('map-tooltip');
+    if (tooltip) {
+        map.on('mouseenter', 'aged-care-pins', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mousemove', 'aged-care-pins', (e) => {
+            if (!e.features.length) return;
+            const p = e.features[0].properties;
+            tooltip.innerHTML = `
+                <div class="map-tooltip-name">${p.HomeName}</div>
+                <div class="map-tooltip-meta">
+                    ${p.Suburb} ${p.State} · ${p.EntityName}
+                    ${p.GeocodeSource === 'mapbox' ? ' · Mapbox-geocoded, verify before relying on this pin' : ''}
+                </div>`;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.point.x + 14) + 'px';
+            tooltip.style.top  = (e.point.y + 14) + 'px';
+        });
+        map.on('mouseleave', 'aged-care-pins', () => {
+            map.getCanvas().style.cursor = '';
+            tooltip.style.display = 'none';
+        });
+    }
+}
+
+function removeAgedCareLayer() {
+    if (map.getLayer('aged-care-pins')) map.removeLayer('aged-care-pins');
+    if (map.getSource('aged-care')) map.removeSource('aged-care');
+}
+
 // ============================================================
 // F-06 — Map view switching (Composite / Whitespace / SEIFA)
 // ============================================================
@@ -2167,6 +2296,17 @@ function setMapView(view) {
             40, '#97C777',
             60, '#6E9277',
             80, '#465E4D'
+        ]);
+    } else if (view === 'chainPenetration') {
+        map.setPaintProperty('sa3-fill', 'fill-color', [
+            'case', ['==', ['get', 'ChainPenetrationPct'], null], '#CCCCCC',
+            ['step', ['coalesce', ['get', 'ChainPenetrationPct'], -1],
+                '#E8EFE9',
+                10, '#C5E0B3',
+                20, '#97C777',
+                35, '#6E9277',
+                60, '#465E4D'
+            ]
         ]);
     } else if (view === 'nra-fees-per-service') {
         map.setPaintProperty('sa3-fill', 'fill-color', [
@@ -2315,6 +2455,31 @@ function renderLegend(view) {
             <div class="tier-row-note">
                 <span style="color:var(--muted);font-size:10px;line-height:1.4">
                     Supply density · age cohort · DPA
+                </span>
+            </div>
+        `;
+        return;
+    }
+
+    if (view === 'chainPenetration') {
+        titleEl.textContent = 'Chain penetration';
+        bodyEl.innerHTML = [
+            { sw: '#465E4D', label: 'Highly consolidated', range: '≥60%' },
+            { sw: '#6E9277', label: 'Consolidating',       range: '35–59%' },
+            { sw: '#97C777', label: 'Some chain presence',range: '20–34%' },
+            { sw: '#C5E0B3', label: 'Mostly independent',  range: '10–19%' },
+            { sw: '#E8EFE9', label: 'Fragmented',          range: '0–9%' },
+            { sw: '#CCCCCC', label: 'No GP clinics recorded', range: '—' }
+        ].map(r => `
+            <div class="tier-row">
+                <span class="tier-swatch" style="background:${r.sw}"></span>
+                <span>${r.label}</span>
+                <span class="tier-range">${r.range}</span>
+            </div>
+        `).join('') + `
+            <div class="tier-row-note">
+                <span style="color:var(--muted);font-size:10px;line-height:1.4">
+                    % of GP clinics in an identified corporate chain · excludes independent/NGO/unclassified
                 </span>
             </div>
         `;
@@ -2533,19 +2698,8 @@ const CATALOGUE_CATEGORIES = [
         sections: [
             { name: 'Population & Projections', items: [
                 { label: 'Estimated resident population', hint: 'ABS ERP · Jun 2024 — feeds the composite', locked: true, type: 'REGION' },
-                { label: 'Population projections to 2031', hint: 'ABS series B · Nov 2023', available: false, type: 'REGION' },
                 { label: 'Share of population aged 65+', hint: 'ABS ERP · Jun 2024 — shown in every region’s profile, not a composite input', locked: true, lockedLabel: 'In region profile', type: 'REGION' },
                 { label: 'Population growth, 5-year CAGR', hint: 'Derived · ABS ERP — the growth half of Demand, feeds the composite', locked: true, type: 'REGION' },
-            ]},
-            { name: 'Epidemiology & Burden', items: [
-                { label: 'Type 2 diabetes prevalence', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
-                { label: 'COPD prevalence', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
-                { label: 'Mental health conditions', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
-                { label: 'ED presentations per 1,000', hint: 'AIHW · Jan 2025', available: false, type: 'REGION' },
-            ]},
-            { name: 'Aged-care Demand', items: [
-                { label: 'Residential aged-care places', hint: 'GEN Aged Care · Apr 2025', available: false, type: 'REGION' },
-                { label: 'Home care packages', hint: 'GEN Aged Care · Apr 2025', available: false, type: 'REGION' },
             ]},
         ],
     },
@@ -2556,20 +2710,12 @@ const CATALOGUE_CATEGORIES = [
             { name: 'Sites & Business Counts', items: [
                 { label: 'General practice clinics', hint: 'NHSD · Mar 2025', layerToggle: 'gp', type: 'PINS' },
                 { label: 'Physiotherapy clinics', hint: 'NHSD · Mar 2025', layerToggle: 'physio', type: 'PINS' },
-                { label: 'Dental clinics', hint: 'NHSD · Mar 2025 — 0 clinics loaded for this market today', available: false, type: 'PINS' },
-                { label: 'Community pharmacies', hint: 'PBS approved suppliers · Feb 2025', available: false, type: 'PINS' },
-                { label: 'Public hospitals & emergency departments', hint: 'AIHW · Jan 2025', available: false, type: 'PINS' },
-                { label: 'Telehealth-only providers', hint: 'MyHR · Mar 2025', available: false, type: 'PINS' },
             ]},
             { name: 'Density & Saturation', items: [
                 { label: 'Clinics per 10,000 residents', hint: 'Derived · NHSD × ABS ERP — the Supply input, feeds the composite', locked: true, type: 'REGION' },
             ]},
             { name: 'Practitioner Workforce', items: [
                 { key: 'workforce', label: 'Workforce risk & DPA flags', hint: 'DoctorConnect DPA status + composite supply/age/DPA risk score', gpOnly: true, type: 'REGION' },
-                { label: 'GP FTE per 100,000', hint: 'NHWDS · Jun 2024', available: false, type: 'REGION' },
-                { label: 'Allied health FTE per 100,000', hint: 'NHWDS · Jun 2024', available: false, type: 'REGION' },
-                { label: 'Registrar training posts', hint: 'RACGP / ACRRM · Feb 2025', available: false, type: 'REGION' },
-                { label: 'Practitioner churn, 3-year', hint: 'Derived · NHWDS', available: false, type: 'REGION' },
             ]},
         ],
     },
@@ -2579,14 +2725,10 @@ const CATALOGUE_CATEGORIES = [
         sections: [
             { name: 'Ownership & Consolidation', items: [
                 { label: 'Ownership mix — corporate vs independent', hint: 'Foundry classification · Mar 2025 — feeds the composite', locked: true, type: 'REGION' },
-                { label: 'Chain penetration by SA3', hint: 'Foundry classification · Mar 2025', available: false, type: 'REGION' },
-                { label: 'Recorded transactions, 5-year', hint: 'Foundry deal log · Mar 2025', available: false, type: 'REGION' },
-            ]},
-            { name: 'Saturation', items: [
-                { label: 'Mean catchment overlap', hint: 'Derived · drive-time isochrones', available: false, type: 'REGION' },
+                { key: 'chainPenetration', label: 'Chain penetration by SA3', hint: 'Derived · NHSD × Foundry classification — % of clinics per SA3 belonging to an identified corporate chain (excludes independent/NGO/unclassified)', gpOnly: true, type: 'REGION' },
             ]},
             { name: 'Adjacent Providers', items: [
-                { label: 'Aged-care provider locations', hint: 'GEN Aged Care · Apr 2025', available: false, type: 'PINS' },
+                { key: 'agedCareProviders', immediate: true, label: 'Aged-care provider locations', hint: 'Aged Care Quality and Safety Commission · Sep 2026 — 2,910 of 2,933 registered residential homes geocoded (G-NAF + Mapbox for G-NAF misses, medium-confidence or better only) — also toggleable from Step 1’s clinic layers, applies instantly, not part of "Load" below', type: 'PINS' },
             ]},
         ],
     },
@@ -2597,16 +2739,9 @@ const CATALOGUE_CATEGORIES = [
             { name: 'Household Means', items: [
                 { label: 'Median household income', hint: '2021 Census · ABS — feeds the composite', locked: true, type: 'REGION' },
                 { key: 'seifa', label: 'SEIFA IRSAD decile', hint: '2021 Census · ABS — socioeconomic disadvantage/advantage, decile 1 (most disadvantaged) to 10', type: 'REGION' },
-                { label: 'SEIFA IRSD decile', hint: '2021 Census · ABS', available: false, type: 'REGION' },
             ]},
             { name: 'Payer Mix & Billing', items: [
                 { key: 'gpBillings', label: 'Bulk-billing rate, non-referred attendances', hint: 'Services Australia · Dec 2024 — also includes avg fees/service, total fees, 3Y CAGR', gpOnly: true, type: 'REGION' },
-                { label: 'MBS services per capita', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
-                { label: 'Private health insurance coverage', hint: 'APRA · Jun 2024', available: false, type: 'REGION' },
-            ]},
-            { name: 'Program Funding', items: [
-                { label: 'Commonwealth Home Support Programme (CHSP)', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
-                { label: 'National Disability Insurance Scheme (NDIS)', hint: 'PHIDU · Apr 2023', available: false, type: 'REGION' },
             ]},
         ],
     },
@@ -2624,7 +2759,22 @@ const CATALOGUE_BUNDLES = [
 // visibility — used to reset a bundle cleanly (anything not in the bundle's
 // `loads` gets explicitly unloaded, not just left alone).
 function allCatalogueOptionalKeys() {
-    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) => s.items.filter((i) => i.key).map((i) => i.key)));
+    // Excludes immediate items (same reason layerToggle items are already
+    // excluded via not having a .key at all) -- they apply the instant
+    // you click them, never staged, so they must never count toward the
+    // Load button's "N changes staged" total.
+    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) => s.items.filter((i) => i.key && !i.immediate).map((i) => i.key)));
+}
+
+// Labels of items that are always active and genuinely feed the composite
+// score, regardless of what's been loaded from the catalogue — used so
+// Step 3's empty state can say what's already there instead of implying
+// nothing is. Excludes locked items that aren't composite inputs (e.g. the
+// aged-65+ stat, which is informational only — see its own lockedLabel).
+function requiredCatalogueItemLabels() {
+    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) =>
+        s.items.filter((i) => i.locked && i.lockedLabel !== 'In region profile').map((i) => i.label)
+    ));
 }
 
 // Staged selections while the modal is open — committed to
@@ -2661,6 +2811,7 @@ function renderCatalogueNav() {
         const lockedCount = allItems.filter((i) => i.locked || (i.layerToggle && i.layerToggle === State.markets.current)).length;
         const loadedCount = allItems.filter((i) => {
             if (i.layerToggle) return i.layerToggle === State.markets.current || State.activeClinicLayers.includes(i.layerToggle);
+            if (i.immediate) return !!State.catalogueLoaded[i.key];
             return i.locked || catalogueStaged[i.key];
         }).length;
         return `
@@ -2714,6 +2865,23 @@ function renderCatalogueDetail(key) {
                             <div>
                                 <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
                                 <div class="catalogue-row-hint">${hint}</div>
+                            </div>
+                        </label>
+                    `;
+                }
+                if (i.immediate) {
+                    // Same immediate-effect convention as layerToggle above,
+                    // for items that aren't a GP/Physio/Dental clinic layer
+                    // but still apply the instant you click them (e.g. the
+                    // aged-care overlay, also toggleable from Step 1).
+                    const checked = !!State.catalogueLoaded[i.key];
+                    const badge = checked ? '<span class="catalogue-row-badge catalogue-row-badge-live">On the map now</span>' : '';
+                    return `
+                        <label class="catalogue-row">
+                            <input type="checkbox" data-key="${i.key}" ${checked ? 'checked' : ''} onchange="toggleImmediateCatalogueItem('${i.key}', this.checked)">
+                            <div>
+                                <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
+                                <div class="catalogue-row-hint">${i.hint}</div>
                             </div>
                         </label>
                     `;
@@ -2846,6 +3014,67 @@ function loadDataCatalogueSelections() {
     closeDataCatalogue();
 }
 
+// "Chain penetration by SA3" (Data Catalogue, Competition category) — % of GP
+// clinics per SA3 belonging to an identified corporate chain, excluding the
+// non-entity buckets the raw corporate_chain field also carries (same
+// exclusion list as the Targets chain dossier's buildChainDossier(), kept as an
+// independent copy here rather than a cross-file reference since it's a
+// small, stable, hand-curated list). Uses State.clinicsByVertical.gp
+// directly (not the currently-active-layers flat list) — this is a GP-only
+// metric regardless of which map layers happen to be toggled on.
+const NON_ENTITY_CHAIN_NAMES = new Set(['independent', 'ngo', 'unknown', 'n/a', 'public', 'government', 'not classified']);
+
+function computeChainPenetrationBySa3() {
+    const gpClinics = State.clinicsByVertical?.gp || [];
+    const bySa3 = new Map(); // sa3_code -> {total, chainOwned}
+    gpClinics.forEach((c) => {
+        const sa3 = c.sa3_code;
+        if (!sa3) return;
+        const entry = bySa3.get(sa3) || { total: 0, chainOwned: 0 };
+        entry.total += 1;
+        const chain = (c['Corporate Chain'] || '').trim();
+        if (chain && !NON_ENTITY_CHAIN_NAMES.has(chain.toLowerCase())) entry.chainOwned += 1;
+        bySa3.set(sa3, entry);
+    });
+    const pctBySa3 = new Map();
+    bySa3.forEach((entry, sa3) => {
+        pctBySa3.set(sa3, Math.round((entry.chainOwned / entry.total) * 1000) / 10); // 1dp
+    });
+    return pctBySa3;
+}
+
+// Bakes the computed % directly onto sa3Data feature properties (matching
+// how SEIFA/Workforce/NRA all arrive as plain GeoJSON properties before the
+// app ever colours the map) so setMapView('chainPenetration') can read it
+// with the same ['get', ...] paint-expression pattern as every other lens.
+// null (not 0) for an SA3 with no GP clinics at all — a real "no data" case,
+// not a genuine 0% penetration reading — rendered as the same grey used for
+// the NRA lenses' own no-data case.
+function applyChainPenetrationToSa3Features(load) {
+    if (!State.sa3Data) return;
+    const pctBySa3 = load ? computeChainPenetrationBySa3() : null;
+    State.sa3Data.features.forEach((f) => {
+        const sa3 = f.properties.SA3Code;
+        f.properties.ChainPenetrationPct = load ? (pctBySa3.has(sa3) ? pctBySa3.get(sa3) : null) : null;
+    });
+    if (map.getSource('sa3')) map.getSource('sa3').setData(State.sa3Data);
+}
+
+// Generic immediate-effect catalogue toggle -- for items that apply the
+// instant you click them (like layerToggle/toggleClinicLayer) but aren't a
+// GP/Physio/Dental clinic layer, so they don't belong in that market-
+// specific system. Refreshes the catalogue modal's own nav/detail too, same
+// as toggleClinicLayer does, in case it's open while Step 1's own checkbox
+// is what triggered this.
+function toggleImmediateCatalogueItem(key, checked) {
+    State.catalogueLoaded[key] = checked;
+    applyCatalogueLoadedState();
+    if (!document.getElementById('catalogue-modal-backdrop')?.classList.contains('hidden')) {
+        renderCatalogueNav();
+        renderCatalogueDetail(catalogueActiveCategory);
+    }
+}
+
 // Applies State.catalogueLoaded to the actual UI: Step 3 filter sections,
 // the dynamic Colour-by chip(s), and the GP Billings dropdown.
 function applyCatalogueLoadedState() {
@@ -2853,13 +3082,33 @@ function applyCatalogueLoadedState() {
     const groundBtn = document.getElementById('ground-add-from-catalogue');
     const seifaSection = document.getElementById('ses-remoteness-section');
     const workforceSection = document.getElementById('workforce-section');
+    const chainPenetrationSection = document.getElementById('chain-penetration-section');
+    const agedCareSection = document.getElementById('aged-care-section');
     const extraFilters = document.getElementById('ground-extra-filters');
-    const anyLoaded = State.catalogueLoaded.seifa || State.catalogueLoaded.workforce || State.catalogueLoaded.gpBillings;
+    const anyLoaded = State.catalogueLoaded.seifa || State.catalogueLoaded.workforce || State.catalogueLoaded.gpBillings || State.catalogueLoaded.chainPenetration || State.catalogueLoaded.agedCareProviders;
 
     if (seifaSection) seifaSection.classList.toggle('hidden', !State.catalogueLoaded.seifa);
+    if (chainPenetrationSection) chainPenetrationSection.classList.toggle('hidden', !State.catalogueLoaded.chainPenetration);
+    applyChainPenetrationToSa3Features(State.catalogueLoaded.chainPenetration);
+    if (agedCareSection) agedCareSection.classList.toggle('hidden', !State.catalogueLoaded.agedCareProviders);
+    if (State.catalogueLoaded.agedCareProviders) ensureAgedCareLayer(); else removeAgedCareLayer();
+    // Two entry points drive the same State.catalogueLoaded.agedCareProviders
+    // flag (this Step 1 checkbox and the catalogue's own) -- keep this one
+    // in sync regardless of which one triggered the change.
+    const agedCareStep1Toggle = document.getElementById('aged-care-layer-toggle');
+    if (agedCareStep1Toggle) agedCareStep1Toggle.checked = State.catalogueLoaded.agedCareProviders;
     if (workforceSection) workforceSection.classList.toggle('hidden', !State.catalogueLoaded.workforce);
     if (extraFilters) extraFilters.classList.toggle('hidden', !anyLoaded);
-    if (groundEmpty) groundEmpty.classList.toggle('hidden', anyLoaded);
+    if (groundEmpty) {
+        groundEmpty.classList.toggle('hidden', anyLoaded);
+        // "Nothing loaded" was never literally true — population, growth,
+        // income, ownership mix and clinic density always feed the score
+        // regardless of what's been added from the catalogue. Say so.
+        const requiredLabels = requiredCatalogueItemLabels();
+        groundEmpty.textContent = requiredLabels.length
+            ? `Already feeding your score: ${requiredLabels.join(', ')}. Add SEIFA, workforce risk or more from the catalogue to layer on real filters.`
+            : 'Add demand, competition or economics data from the catalogue and it becomes a filter here.';
+    }
     if (groundBtn) groundBtn.textContent = anyLoaded ? 'Add more from catalogue' : 'Add from catalogue';
     if (!State.catalogueLoaded.seifa) State.catalogueFilterActive.seifa = false; // reset on unload
 
@@ -2895,10 +3144,29 @@ function renderCatalogueDatasetControls() {
             </div>
         ` : '';
     }
+    const chainPenetrationEl = document.getElementById('chain-penetration-dataset-controls');
+    if (chainPenetrationEl) {
+        chainPenetrationEl.innerHTML = State.catalogueLoaded.chainPenetration ? `
+            <span class="catalogue-dataset-name">Chain penetration by SA3</span>
+            <div class="catalogue-dataset-btn-row">
+                <button type="button" class="catalogue-dataset-btn" onclick="colourMapByDataset('chainPenetration')">Colour map by this</button>
+                <button type="button" class="catalogue-dataset-remove" onclick="removeCatalogueDataset('chainPenetration')" title="Remove chain penetration by SA3">✕</button>
+            </div>
+        ` : '';
+    }
+    const agedCareEl = document.getElementById('aged-care-dataset-controls');
+    if (agedCareEl) {
+        agedCareEl.innerHTML = State.catalogueLoaded.agedCareProviders ? `
+            <span class="catalogue-dataset-name">Aged-care provider locations</span>
+            <div class="catalogue-dataset-btn-row">
+                <button type="button" class="catalogue-dataset-remove" onclick="removeCatalogueDataset('agedCareProviders')" title="Remove aged-care provider locations">✕</button>
+            </div>
+        ` : '';
+    }
 }
 
 function colourMapByDataset(key) {
-    const lens = { seifa: 'seifa', workforce: 'workforce' }[key];
+    const lens = { seifa: 'seifa', workforce: 'workforce', chainPenetration: 'chainPenetration' }[key];
     if (!lens) return;
     setMapView(lens);
     saveLensState(lens);
@@ -2953,25 +3221,33 @@ async function toggleSeifaRegionLimit() {
     updateRailStats();
 }
 
-// Dynamic Colour-by chip for SEIFA (desktop + mobile) — only appears once
-// loaded from the catalogue. Delegated active-class sync (wireLensActiveSync
-// in wireUI) handles visual state on click; setMapView() itself calls this
-// too so the chip's active class stays correct even when SEIFA is entered
-// via decile-chip selection rather than a direct click on this chip.
+// Dynamic Colour-by chips (desktop + mobile) for catalogue items that are
+// lens-only — only appear once loaded. Delegated active-class sync
+// (wireLensActiveSync in wireUI) handles visual state on click; setMapView()
+// itself calls this too so a chip's active class stays correct even when its
+// lens is entered some other way (e.g. SEIFA via decile-chip selection
+// rather than a direct click on this chip).
+const DYNAMIC_LENS_CHIPS = [
+    { loadedKey: 'chainPenetration', lens: 'chainPenetration', label: 'Chain penetration' },
+    { loadedKey: 'seifa', lens: 'seifa', label: 'SEIFA' },
+];
+
 function renderCatalogueLensChips() {
     const wireChip = (btn) => {
         btn.addEventListener('click', () => { setMapView(btn.dataset.lens); saveLensState(btn.dataset.lens); });
     };
+    const chipHtml = (mobile) => DYNAMIC_LENS_CHIPS
+        .filter((c) => State.catalogueLoaded[c.loadedKey])
+        .map((c) => `<button class="${mobile ? 'mob-lens-chip ' : ''}lens-seg${State.currentMapView === c.lens ? ' active' : ''}" data-lens="${c.lens}">${c.label}</button>`)
+        .join('');
     const desktop = document.getElementById('catalogue-lens-chips');
     if (desktop) {
-        desktop.innerHTML = State.catalogueLoaded.seifa
-            ? `<button class="lens-seg${State.currentMapView === 'seifa' ? ' active' : ''}" data-lens="seifa">SEIFA</button>` : '';
+        desktop.innerHTML = chipHtml(false);
         desktop.querySelectorAll('.lens-seg').forEach(wireChip);
     }
     const mobile = document.getElementById('mob-catalogue-lens-chips');
     if (mobile) {
-        mobile.innerHTML = State.catalogueLoaded.seifa
-            ? `<button class="mob-lens-chip lens-seg${State.currentMapView === 'seifa' ? ' active' : ''}" data-lens="seifa">SEIFA</button>` : '';
+        mobile.innerHTML = chipHtml(true);
         mobile.querySelectorAll('.lens-seg').forEach(wireChip);
     }
 }
@@ -5692,7 +5968,7 @@ function renderRankings() {
 
     // Hide GP-only column chips when not on GP market
     const isGP = (State.markets.current || 'gp') === 'gp';
-    document.querySelectorAll('[data-table-view="nra"], [data-table-view="archetypes"], [data-table-view="targets"]').forEach(chip => {
+    document.querySelectorAll('[data-table-view="nra"], [data-table-view="archetypes"]').forEach(chip => {
         chip.style.display = isGP ? '' : 'none';
         // If a GP-only view is currently active but we're not on GP, reset to composite
         if (!isGP && chip.classList.contains('active')) {
@@ -6606,6 +6882,11 @@ function wireUI() {
         map.getSource('sa3').setData(State.sa3Data);
     }
 
+    const WF_DEFAULT_WEIGHTS = { supply: 40, age: 30, dpa: 30 };
+    function isDefaultWorkforceWeights() {
+        return WF_KEYS.every(k => Math.round(State.workforceWeights[k]) === WF_DEFAULT_WEIGHTS[k]);
+    }
+
     function updateWorkforceWeightUI() {
         WF_KEYS.forEach(k => {
             const slider = document.getElementById('wf-weight-slider-' + k);
@@ -6613,6 +6894,8 @@ function wireUI() {
             if (slider) slider.value = Math.round(State.workforceWeights[k]);
             if (readout) readout.textContent = Math.round(State.workforceWeights[k]) + '%';
         });
+        const resetBtn = document.getElementById('workforce-reset');
+        if (resetBtn) resetBtn.classList.toggle('hidden', isDefaultWorkforceWeights());
     }
 
     WF_KEYS.forEach(k => {
@@ -6684,7 +6967,6 @@ function wireUI() {
         const showComposite  = view === 'composite'  || view === 'all';
         const showNra        = view === 'nra'        || view === 'all';
         const showArchetypes = view === 'archetypes' || view === 'all';
-        const showTargets    = view === 'targets'    || view === 'all';
 
         document.querySelectorAll('.composite-col').forEach(el => {
             el.style.display = showComposite ? '' : 'none';
@@ -6695,42 +6977,6 @@ function wireUI() {
         document.querySelectorAll('.archetype-col').forEach(el => {
             el.style.display = showArchetypes ? '' : 'none';
         });
-        document.querySelectorAll('.target-col').forEach(el => {
-            el.style.display = showTargets ? '' : 'none';
-        });
-
-        // F-02: Generate dynamic target columns if viewing targets
-        if (showTargets && State.clinicChainFilter && State.clinicChainFilter.length > 0) {
-            updateTargetTableColumns();
-        }
-    }
-
-    /**
-     * F-02: Dynamically add/remove target column headers based on selected filters
-     */
-    function updateTargetTableColumns() {
-        const thead = document.querySelector('.rankings-table thead tr');
-        if (!thead) return;
-
-        // Remove existing target column headers (except placeholder)
-        document.querySelectorAll('.target-col').forEach(col => {
-            if (col.tagName === 'TH') col.remove();
-        });
-
-        // Add new target column headers for each selected chain
-        const selectedChains = State.clinicChainFilter || [];
-        selectedChains.forEach(chainName => {
-            const paletteEntry = CLINIC_CHAIN_PALETTE[chainName] || {};
-            const slug = paletteEntry.slug || 'unknown';
-            const th = document.createElement('th');
-            th.className = `sortable num-col target-col target-${slug}`;
-            th.setAttribute('data-key', `target_${slug}`);
-            th.textContent = paletteEntry.name || chainName;
-            thead.appendChild(th);
-        });
-
-        // Re-render rankings to include target data
-        renderRankings();
     }
     State.tableView = 'composite';
     applyTableView('composite');
@@ -6929,7 +7175,7 @@ function renderFunnelSummaries() {
         const copilotBits = [];
         if (State.tierFilter && State.tierFilter.length) copilotBits.push(`Tier ${State.tierFilter.slice().sort().join('–')}`);
         if (State.supplyScoreMin != null) copilotBits.push('Low competitive density');
-        const base = loadedCategoryNames.length ? loadedCategoryNames.join(', ') + ' loaded' : 'Nothing loaded';
+        const base = loadedCategoryNames.length ? loadedCategoryNames.join(', ') + ' loaded' : 'Base case — required data only';
         s3.textContent = copilotBits.length ? `${base} · ${copilotBits.join(' · ')}` : base;
     }
 
@@ -8404,7 +8650,7 @@ function gpConfidenceBadge(clinic) {
     // what we found), Not independently checked (no data either way), or
     // Likely inaccurate (specific evidence this number is probably wrong) --
     // each implies a different next action, unlike a vague confidence tier.
-    if (confidence === 'high' || confidence === 'medium') {
+    if (confidence === 'confirmed') {
         const dateStr = scrapedAt
             ? new Date(scrapedAt).toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' })
             : '';
@@ -8413,7 +8659,7 @@ function gpConfidenceBadge(clinic) {
             : "Independently confirmed against the clinic's own website.";
         return `<span class="arch-verified" title="${title}">Confirmed${dateStr ? ` ${dateStr}` : ''}</span>`;
     }
-    if (confidence === 'low') {
+    if (confidence === 'flagged') {
         const title = sourceUrl
             ? "A recent check found a different GP count than what's recorded here -- worth reviewing directly."
             : 'This count may reflect an earlier data-collection limitation and is possibly understated.';

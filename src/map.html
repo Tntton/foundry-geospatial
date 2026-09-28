@@ -518,10 +518,10 @@
                     <div class="rail-accordion-hdr" onclick="toggleAccordion('clinics')">
                         <span class="funnel-step-num">1</span>
                         <span class="rail-accordion-title">What are you buying?</span>
-                        <span class="rail-accordion-arrow" id="acc-arrow-clinics">▾</span>
+                        <span class="rail-accordion-arrow" id="acc-arrow-clinics">▸</span>
                     </div>
                     <div class="funnel-step-summary" id="funnel-summary-clinics"></div>
-                    <div class="rail-accordion-body" id="acc-body-clinics">
+                    <div class="rail-accordion-body collapsed" id="acc-body-clinics">
 
                         <!-- Scoring market switcher (plan Phase D) — single-select,
                              drives switchMarket() directly; replaces the old
@@ -555,6 +555,13 @@
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span class="clinic-layer-row-name">General Practice</span><span class="clinic-layer-count" id="clinic-layer-count-gp"></span></label>
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span class="clinic-layer-row-name">Physiotherapy</span><span class="clinic-layer-count" id="clinic-layer-count-physio"></span></label>
                                 <!-- Dental omitted deliberately -- 0 clinics loaded today, see comment above. -->
+                                <!-- Aged-care providers isn't a scoring market or clinic layer (no
+                                     Format/Billing/Ownership, doesn't feed the composite) -- a plain
+                                     reference overlay, so it drives State.catalogueLoaded.agedCareProviders
+                                     via toggleImmediateCatalogueItem() instead of the clinic-layer system,
+                                     even though it sits in this same checkbox group visually. Same
+                                     immediate-effect checkbox also lives in the Data Catalogue. -->
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" id="aged-care-layer-toggle" onchange="toggleImmediateCatalogueItem('agedCareProviders', this.checked)"><span class="clinic-layer-row-name">Aged Care Providers</span></label>
                             </div>
                         </div>
 
@@ -565,25 +572,30 @@
                         <!-- Archetype section -->
                         <div class="acc-row" id="archetype-filter-section">
                             <div class="rail-eyebrow" title="AND logic across dimensions — none selected = all shown">Narrow the clinics <button class="acc-reset-link" id="archetype-reset" style="display:none">Reset</button></div>
-                            <div class="acc-hint" style="margin-bottom:6px">Clinic filters live here, not in a separate place — narrowing which practices you'd buy is part of deciding what you're buying.</div>
                             <div id="archetype-content">
                                 <div class="acc-sublabel">Format</div>
+                                <div class="acc-hint" style="margin-bottom:6px">Big-box: 6+ GPs · Mid: 3–5 GPs · Small: 1–2 GPs</div>
                                 <div class="mmm-chip-grid archetype-chip-grid">
                                     <label class="mmm-chip-label" title="Big-box: GP count ≥6"><input type="checkbox" class="archetype-chip" data-dim="format" value="Big-box"><span>Big-box</span></label>
                                     <label class="mmm-chip-label" title="Mid-format: GP count 3–5"><input type="checkbox" class="archetype-chip" data-dim="format" value="Mid-format"><span>Mid</span></label>
                                     <label class="mmm-chip-label" title="Small: GP count 1–2"><input type="checkbox" class="archetype-chip" data-dim="format" value="Small"><span>Small</span></label>
                                 </div>
+                                <div id="format-coverage-bar"></div>
+
                                 <div class="acc-sublabel" style="margin-top:6px">Billing model</div>
                                 <div class="mmm-chip-grid archetype-chip-grid">
                                     <label class="mmm-chip-label billing-bulk"><input type="checkbox" class="archetype-chip" data-dim="billing" value="Bulk"><span>Bulk</span></label>
                                     <label class="mmm-chip-label billing-mixed"><input type="checkbox" class="archetype-chip" data-dim="billing" value="Mixed"><span>Mixed</span></label>
                                     <label class="mmm-chip-label billing-private"><input type="checkbox" class="archetype-chip" data-dim="billing" value="Private"><span>Private</span></label>
                                 </div>
+                                <div id="billing-coverage-bar"></div>
+
                                 <div class="acc-sublabel" style="margin-top:6px">Ownership</div>
                                 <div class="mmm-chip-grid archetype-chip-grid">
                                     <label class="mmm-chip-label" title="Recognised corporate brand"><input type="checkbox" class="archetype-chip" data-dim="ownership" value="Corporate"><span>Corp.</span></label>
                                     <label class="mmm-chip-label" title="Independent operator"><input type="checkbox" class="archetype-chip" data-dim="ownership" value="Independent"><span>Indep.</span></label>
                                 </div>
+                                <div id="ownership-coverage-bar"></div>
                             </div>
                         </div>
 
@@ -685,6 +697,19 @@
                             <input type="range" class="seifa-slider" id="workforce-risk-slider" min="0" max="100" step="5" value="0" style="width:100%" />
                         </div>
 
+                        <!-- Chain penetration by SA3 (colour-by lens only, no filter content —
+                             confirmed with user this dataset should just recolor the map, not
+                             narrow the region count). -->
+                        <div class="acc-row hidden" id="chain-penetration-section">
+                            <div class="catalogue-dataset-controls" id="chain-penetration-dataset-controls"></div>
+                        </div>
+
+                        <!-- Aged-care provider pins (plan Phase I) — a plain PINS overlay,
+                             no filter content and no colour-by lens (it's not a region score). -->
+                        <div class="acc-row hidden" id="aged-care-section">
+                            <div class="catalogue-dataset-controls" id="aged-care-dataset-controls"></div>
+                        </div>
+
                         <div class="acc-row hidden" id="ground-extra-filters">
                             <button class="acc-link" id="data-quality-toggle">Data-quality filters ▸</button>
                             <div class="data-quality-sub" id="data-quality-sub" style="display:none">
@@ -756,7 +781,15 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="acc-sublabel" style="padding:4px 16px 2px">Workforce risk weighting</div>
+                        <div style="padding:4px 16px 10px">
+                            <button class="acc-reset-link hidden" id="weights-reset">Reset to base case</button>
+                        </div>
+
+                        <div class="thesis-section-divider"></div>
+
+                        <div class="thesis-banner">
+                            Workforce risk weighting — how supply, age profile and DPA status combine into one score.
+                        </div>
                         <div class="weights-list">
                             <div class="weight-row">
                                 <div class="weight-row-top"><span class="weight-row-label">Supply</span><span id="wf-weight-value-supply">40%</span></div>
@@ -771,8 +804,8 @@
                                 <input type="range" class="weight-slider" id="wf-weight-slider-dpa" min="0" max="100" step="1" value="30" />
                             </div>
                         </div>
-                        <div style="padding:8px 16px 10px">
-                            <button class="acc-reset-link hidden" id="weights-reset">Reset to base case</button>
+                        <div style="padding:4px 16px 10px">
+                            <button class="acc-reset-link hidden" id="workforce-reset">Reset</button>
                         </div>
                     </div>
                 </div>
@@ -953,7 +986,6 @@
                             <button class="chip active" data-table-view="composite">Composite</button>
                             <button class="chip" data-table-view="nra">GP Billings</button>
                             <button class="chip" data-table-view="archetypes">Archetypes</button>
-                            <button class="chip" data-table-view="targets">Targets</button>
                             <button class="chip" data-table-view="all">All</button>
                         </div>
                     </div>
@@ -1028,36 +1060,20 @@
                     <div class="td-strip-right" id="td-summary"></div>
                 </div>
 
-                <div class="td-filter-row">
-                    <div class="td-filter-chips" id="td-filter-chips"></div>
-                    <span class="td-filter-note">Every chain we have classified in this vertical</span>
-                </div>
-
                 <div class="td-table-wrap">
                     <table class="td-table">
                         <thead>
                             <tr>
                                 <th>Chain</th>
-                                <th>Category</th>
                                 <th>Sites</th>
                                 <th>In your slice</th>
-                                <th>Tier 1-2 footprint</th>
-                                <th>Archetype</th>
-                                <th>Billing</th>
+                                <th>Tier footprint</th>
                                 <th>Ownership</th>
                                 <th>States</th>
                             </tr>
                         </thead>
                         <tbody id="td-tbody"></tbody>
                     </table>
-                </div>
-
-                <div class="td-footnote">
-                    Same slice, three readings. <strong>Map</strong> is where. <strong>List</strong> is what about each region.
-                    <strong>Targets</strong> is who already owns it. Change steps 1–3 and all three move together — the
-                    category column is ours, the "in your slice" column is yours. Sites counts the chain's practices in
-                    this vertical only; with nothing filtered, in your slice equals it.
-                    <span id="td-deliver-note"></span>
                 </div>
 
             </div><!-- /subpanel-targets -->
@@ -1993,8 +2009,8 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr42"></script>
-<script src="js/components/targets-tab.js?v=rr7"></script>
+<script src="js/app.js?v=rr51"></script>
+<script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
 
