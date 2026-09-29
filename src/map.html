@@ -555,13 +555,11 @@
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span class="clinic-layer-row-name">General Practice</span><span class="clinic-layer-count" id="clinic-layer-count-gp"></span></label>
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span class="clinic-layer-row-name">Physiotherapy</span><span class="clinic-layer-count" id="clinic-layer-count-physio"></span></label>
                                 <!-- Dental omitted deliberately -- 0 clinics loaded today, see comment above. -->
-                                <!-- Aged-care providers isn't a scoring market or clinic layer (no
-                                     Format/Billing/Ownership, doesn't feed the composite) -- a plain
-                                     reference overlay, so it drives State.catalogueLoaded.agedCareProviders
-                                     via toggleImmediateCatalogueItem() instead of the clinic-layer system,
-                                     even though it sits in this same checkbox group visually. Same
-                                     immediate-effect checkbox also lives in the Data Catalogue. -->
-                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" id="aged-care-layer-toggle" onchange="toggleImmediateCatalogueItem('agedCareProviders', this.checked)"><span class="clinic-layer-row-name">Aged Care Providers</span></label>
+                                <!-- Aged care lives in the clinics table (market_id='aged_care') same as
+                                     GP/Physio/Dental now, just never scored (no Format/Billing/Ownership,
+                                     doesn't feed the composite) -- an ordinary secondary clinic layer via
+                                     toggleClinicLayer(), not a bespoke mechanism. -->
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="aged_care" onchange="toggleClinicLayer('aged_care', this.checked)"><span class="clinic-layer-row-name">Aged Care Providers</span><span class="clinic-layer-count" id="clinic-layer-count-aged_care"></span></label>
                             </div>
                         </div>
 
@@ -702,12 +700,6 @@
                              narrow the region count). -->
                         <div class="acc-row hidden" id="chain-penetration-section">
                             <div class="catalogue-dataset-controls" id="chain-penetration-dataset-controls"></div>
-                        </div>
-
-                        <!-- Aged-care provider pins (plan Phase I) — a plain PINS overlay,
-                             no filter content and no colour-by lens (it's not a region score). -->
-                        <div class="acc-row hidden" id="aged-care-section">
-                            <div class="catalogue-dataset-controls" id="aged-care-dataset-controls"></div>
                         </div>
 
                         <div class="acc-row hidden" id="ground-extra-filters">
@@ -2009,7 +2001,7 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr52"></script>
+<script src="js/app.js?v=rr54"></script>
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
