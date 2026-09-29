@@ -1605,7 +1605,8 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('ownership_chain_classification', 'Ownership mix & chain penetration (corporate vs independent)', 'clinics (ownership, corporate_chain columns)', 'Foundry classification', null, 'Mar 2025', null),
   ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
   ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)'),
-  ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here.')
+  ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here.'),
+  ('ed_lower_urgency_sa3', 'ED presentations for lower-urgency care, by SA3 of usual residence', 'ed_lower_urgency_sa3', 'AIHW Table 4 (Use of emergency departments for lower-urgency care, 2017-18 to 2024-25)', null, '2017-18 to 2024-25 (2024-25 partial, 52 of 340 SA3s reported so far)', 'See the ed_lower_urgency_sa3 section further down for the row-filtering, demographic_type, and data-quality-code notes -- not repeated here.')
 on conflict (dataset_key) do nothing;
 
 -- hospitals + hospital_ed_metrics -- built to
@@ -1794,3 +1795,64 @@ create policy "public read" on hospital_ed_metrics for select using (true);
 --   from hospitals
 --   where location is not null;
 -- $function$
+
+-- ed_lower_urgency_sa3 -- AIHW's "Use of emergency departments for lower
+-- urgency care" report, Table 4 (by SA3 of usual residence). Unlike
+-- hospitals/hospital_ed_metrics (which measure which HOSPITAL absorbed the
+-- load), this measures which SA3 people LIVE in when they make a
+-- lower-urgency ED presentation -- the demand-side half of the "opportunity"
+-- analysis, joinable straight onto the existing sa3 table for composite
+-- scoring/mapping.
+--
+-- The source sheet has 24,995 rows but only 21,888 are genuine per-SA3 rows.
+-- The rest share the same "SA3 code"/"SA3 name" columns with National and
+-- remoteness-band/SES-band rollup pseudo-codes (e.g. "001NAT", "004-01" =
+-- "Major cities - higher socioeconomic areas") -- confirmed by checking:
+-- real ABS SA3 codes are 5-digit numbers, these pseudo-codes aren't. Only
+-- rows with a real numeric SA3 code were kept -- 340 distinct codes, an
+-- exact match to every row in the sa3 table, not a subset. The rollup rows
+-- were deliberately not imported (recomputable live from the per-SA3 data
+-- if ever needed, same reasoning as sa3.supply_score not duplicating a
+-- clinics-table rollup elsewhere in this file).
+--
+-- "Demographic group" in the source conflates two dimensions as
+-- mutually-exclusive row values, not a cross-tab: sex (Males/Females/All
+-- persons) and age band (0-14/15-24/25-44/45-64/0-64/65+). demographic_type
+-- ('sex' | 'age_band') disambiguates which family a given row's value
+-- belongs to, same pattern as category_type on hospital_ed_metrics.
+--
+-- Two distinct null-reasons, not collapsed into one: the three
+-- age-standardised rate columns are "structurally" null (AIHW marks them
+-- "..") for every age_band row, since you cannot age-standardise a group
+-- that's already restricted to one age band -- expected and predictable,
+-- not flagged. "n.p." (not published -- AIHW's own small-sample suppression)
+-- is a genuine data gap, flagged via data_suppressed=true rather than left
+-- indistinguishable from the age-standardisation case. interpret_with_caution
+-- carries AIHW's own "#" advisory (small but real sample) -- the numeric
+-- values are still present on those rows, just flagged, unlike data_suppressed
+-- rows where the values are null.
+create table if not exists ed_lower_urgency_sa3 (
+  sa3_code text references sa3(sa3_code),
+  year text,
+  demographic_group text,           -- 'Males'/'Females'/'All persons', or an age band
+  demographic_type text,            -- 'sex' | 'age_band'
+  remoteness_seifa_group text,      -- the remoteness/SES band this SA3 was classified into for the report
+  state text,
+  rate_all_hours_age_std numeric,
+  rate_all_hours numeric,
+  rate_in_hours_age_std numeric,
+  rate_in_hours numeric,
+  rate_after_hours_age_std numeric,
+  rate_after_hours numeric,
+  presentations_all_hours int,
+  presentations_in_hours int,
+  presentations_after_hours int,
+  presentations_total_ed int,       -- ALL ED presentations (not just lower-urgency) -- the denominator for context
+  estimated_resident_population int,
+  interpret_with_caution boolean not null default false,
+  data_suppressed boolean not null default false,
+  primary key (sa3_code, year, demographic_group)
+);
+create index if not exists ed_lower_urgency_sa3_sa3_idx on ed_lower_urgency_sa3 (sa3_code);
+
+create policy "public read" on ed_lower_urgency_sa3 for select using (true);
