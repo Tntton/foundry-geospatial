@@ -1604,5 +1604,182 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('workforce_dpa', 'Workforce risk & DPA flags', 'sa3 (dpa_bonded, dpa_gp_img, workforce_risk_score columns)', 'DoctorConnect', null, null, 'DPA = Distribution Priority Area status; workforce_risk_score is a Foundry-derived composite'),
   ('ownership_chain_classification', 'Ownership mix & chain penetration (corporate vs independent)', 'clinics (ownership, corporate_chain columns)', 'Foundry classification', null, 'Mar 2025', null),
   ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
-  ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)')
+  ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)'),
+  ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_presentations + hospital_ed_seen_on_time + hospital_ed_timeliness', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_* section further down for the full geocoding provenance and data-quality-code notes -- not repeated here.')
 on conflict (dataset_key) do nothing;
+
+-- hospitals + hospital_ed_presentations/seen_on_time/timeliness -- built to
+-- support an "opportunity hospital" analysis (high low-urgency ED volume +
+-- high overflow/overcrowding = demand a GP-type provider could capture).
+-- Source: AIHW MyHospitals "Emergency department" extract, 4 sheets sharing
+-- a hospital+year grain (Presentations / Patients seen on time / Time in ED
+-- - within 4 hrs / Time in ED), 311 distinct hospitals, 2011-12 to 2024-25.
+--
+-- Geocoding (the hard part -- the AIHW extract has no address, only a
+-- hospital name + state): matched against NHSD (same facility directory
+-- already used for GP/Physio clinics) first -- 216 of 311 matched safely,
+-- using an exact/near-exact token-set comparison, NOT raw fuzzy string
+-- similarity (that produced real false positives during development, e.g.
+-- "Armidale Hospital" -> "Camden Hospital" on shared-length/shared-word
+-- coincidence -- rejected). A conflict-word list (private/hospice/etc, must
+-- appear on both sides or neither) caught two more subtle false positives:
+-- "Maitland Hospital" -> "Maitland Private Hospital" and "Albany Hospital"
+-- -> "Albany Hospice" (different facilities sharing a town name). Remaining
+-- 95 were searched individually via Google Maps (name + state), address
+-- text read from the result card; 94 resolved (one, Manly Hospital, closed
+-- 2015 with no address recoverable anywhere -- left blank). Some major
+-- public hospitals (Liverpool, John Hunter, Prince of Wales, Westmead,
+-- Frankston, Bunbury, Broome, Royal Darwin...) turned out to exist in the
+-- NHSD extract only as mistagged sub-department records (pharmacy, a named
+-- clinic) under the wrong NHSD_SERVICE_TYPE, not as their own Hospital/ED
+-- entry -- a real gap in that specific extract, confirmed by direct search
+-- before falling back to Google Maps for those too.
+--
+-- Those 94 addresses were then geocoded via Mapbox (structured address
+-- type, not the unreliable facility-name POI search used earlier in this
+-- project's aged-care pipeline) -- 5 came back low-confidence because the
+-- address has no street number (hospitals often occupy a whole block, e.g.
+-- "Reserve Rd, St Leonards" for Royal North Shore), so those 5 were instead
+-- read directly off Google's own resolved place-link coordinates (the same
+-- precise !3d/!4d values embedded in its search-result hrefs).
+--
+-- 5 hospitals were left with no coordinates at all rather than guessed:
+-- Manly Hospital (closed, unrecoverable), and 4 cases where today's
+-- successor facility sits at a genuinely different physical site than the
+-- one AIHW's older rows refer to -- Byron Bay Hospital (-> Byron Central
+-- Hospital, different town, opened ~2022), Mater Children's Hospital and
+-- Royal Children's Hospital [Queensland] (both likely predecessors folded
+-- into Queensland Children's Hospital when it opened in 2014), and Princess
+-- Margaret Hospital for Children (closed 2018, replaced by Perth Children's
+-- Hospital at a new site). Using the successor's current address for these
+-- would silently misplace every pre-transition year's data.
+create table if not exists hospitals (
+  hospital_name text primary key,  -- the AIHW "Reporting unit" name -- the join key hospital_ed_* uses
+  matched_name text,               -- the real-world facility name (NHSD or Google Maps), for display
+  state text,
+  address text,
+  suburb text,
+  latitude numeric,
+  longitude numeric,
+  location geography(Point, 4326),
+  source text,                     -- 'nhsd' | 'google_maps' | 'google_maps+mapbox' | null (unresolved)
+  sa3_code text,
+  sa3_name text,
+  phn_code text,
+  phn_name text,
+  notes text                       -- populated for the 5 no-coordinate rows and other caveats above
+);
+create index if not exists hospitals_location_idx on hospitals using gist (location);
+
+update hospitals set location = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography
+where latitude is not null and longitude is not null and location is null;
+
+-- Same ST_Contains point-in-polygon pattern used throughout this file --
+-- 100% match on all 306 geocoded rows for both sa3 and phn (no boundary-seam
+-- misses this time, unlike the aged_care_providers backfill).
+update hospitals h set sa3_code = s.sa3_code, sa3_name = s.sa3_name
+from sa3 s where h.location is not null and h.sa3_code is null
+  and ST_Contains(s.geom::geometry, h.location::geometry);
+
+update hospitals h set phn_code = p.phn_code, phn_name = p.phn_name
+from phn p where h.location is not null and h.phn_code is null
+  and ST_Contains(p.geom_simplified::geometry, h.location::geometry);
+
+-- Three fact tables, one per AIHW measure, all keyed on (hospital_name,
+-- year, ...) -- NOT folded into clinics like aged_care_providers was, since
+-- this data is fundamentally a time series (one row per hospital PER YEAR
+-- per category), not a snapshot entity clinics' one-row-per-facility shape
+-- fits. hospital_ed_seen_on_time kept separate from hospital_ed_presentations
+-- despite the similar (hospital, year, triage_category) grain because the
+-- two sheets count different things -- "Presentations" includes every visit
+-- type, "seen on time" explicitly excludes non-emergency-presentation
+-- visits, so merging them would silently conflate two different
+-- denominators. hospital_ed_timeliness merges the "within 4 hrs" and "time
+-- in ED" sheets, which share the same (hospital, year, patient_cohort)
+-- grain and are genuinely the same underlying fact, just split into two
+-- CSV exports by MyHospitals.
+--
+-- data_quality: AIHW privacy-suppresses small counts as "<5" -- presentations
+-- set to 5 (data_quality='suppressed_lt5') per explicit instruction, rather
+-- than left null or a fabricated-precise midpoint. "NP"/"NP†" (could not
+-- be calculated) and "-" (nothing reported) are left null with their own
+-- reason codes ('not_calculable' / 'not_reported') -- genuinely different
+-- meanings from a suppressed-but-real count, not collapsed into one flag.
+create table if not exists hospital_ed_presentations (
+  hospital_name text references hospitals(hospital_name),
+  year text,
+  triage_category text,
+  presentations int,
+  data_quality text,
+  primary key (hospital_name, year, triage_category)
+);
+create index if not exists hospital_ed_presentations_hospital_idx on hospital_ed_presentations (hospital_name);
+
+create table if not exists hospital_ed_seen_on_time (
+  hospital_name text references hospitals(hospital_name),
+  year text,
+  triage_category text,
+  peer_group text,
+  presentations int,
+  pct_seen_on_time numeric,
+  peer_group_avg numeric,
+  data_quality text,
+  primary key (hospital_name, year, triage_category)
+);
+create index if not exists hospital_ed_seen_on_time_hospital_idx on hospital_ed_seen_on_time (hospital_name);
+
+-- median_minutes/p90_minutes parsed from AIHW's own display strings (e.g.
+-- "1 hrs 58 mins") into plain integer minutes for actual computation --
+-- median_display/p90_display kept alongside for exact-original-text display.
+create table if not exists hospital_ed_timeliness (
+  hospital_name text references hospitals(hospital_name),
+  year text,
+  patient_cohort text,
+  peer_group text,
+  presentations int,
+  pct_within_4hrs numeric,
+  pct_within_4hrs_peer_avg numeric,
+  median_minutes int,
+  median_display text,
+  p90_minutes int,
+  p90_display text,
+  p90_peer_avg_minutes int,
+  data_quality text,
+  primary key (hospital_name, year, patient_cohort)
+);
+create index if not exists hospital_ed_timeliness_hospital_idx on hospital_ed_timeliness (hospital_name);
+
+-- Same RLS-auto-enabled-with-no-policy gotcha every new table in this project
+-- has hit -- confirmed live, added before it silently broke the anon key.
+create policy "public read" on hospitals for select using (true);
+create policy "public read" on hospital_ed_presentations for select using (true);
+create policy "public read" on hospital_ed_seen_on_time for select using (true);
+create policy "public read" on hospital_ed_timeliness for select using (true);
+
+-- RPC for the map layer -- same convention as get_aged_care_providers_geojson
+-- was, get_phn_geojson, etc. The three hospital_ed_* fact tables are read
+-- directly via PostgREST (no RPC needed -- verified live: a plain
+-- ?hospital_name=eq....&order=year.desc query against the anon key works),
+-- since they're already flat/filterable and don't need geometry conversion.
+-- CREATE OR REPLACE FUNCTION public.get_hospitals_geojson()
+--  RETURNS jsonb LANGUAGE sql STABLE
+--  SET search_path TO 'public', 'extensions', 'pg_catalog'
+--  SET statement_timeout TO '30s'
+-- AS $function$
+--   select jsonb_build_object(
+--     'type', 'FeatureCollection',
+--     'features', coalesce(jsonb_agg(
+--       jsonb_build_object(
+--         'type', 'Feature',
+--         'geometry', ST_AsGeoJSON(location)::jsonb,
+--         'properties', jsonb_build_object(
+--           'HospitalName', hospital_name, 'MatchedName', matched_name, 'State', state,
+--           'Address', address, 'Suburb', suburb, 'SA3Code', sa3_code, 'SA3Name', sa3_name,
+--           'PHNCode', phn_code, 'PHNName', phn_name, 'Source', source
+--         )
+--       )
+--     ), '[]'::jsonb)
+--   )
+--   from hospitals
+--   where location is not null;
+-- $function$
