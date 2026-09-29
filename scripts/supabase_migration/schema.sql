@@ -1605,7 +1605,7 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('ownership_chain_classification', 'Ownership mix & chain penetration (corporate vs independent)', 'clinics (ownership, corporate_chain columns)', 'Foundry classification', null, 'Mar 2025', null),
   ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
   ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)'),
-  ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here.'),
+  ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here. ED diversion opportunity score (hospitals.diversion_opportunity_score etc.) is a Foundry-derived analytical layer computed from this data 2026-09-29 -- not a raw AIHW field -- see the hospitals table definition and the score-computation block further down.'),
   ('ed_lower_urgency_sa3', 'ED presentations for lower-urgency care, by SA3 of usual residence', 'ed_lower_urgency_sa3', 'AIHW Table 4 (Use of emergency departments for lower-urgency care, 2017-18 to 2024-25)', null, '2017-18 to 2024-25 (2024-25 partial, 52 of 340 SA3s reported so far)', 'See the ed_lower_urgency_sa3 section further down for the row-filtering, demographic_type, and data-quality-code notes -- not repeated here.')
 on conflict (dataset_key) do nothing;
 
@@ -1668,9 +1668,28 @@ create table if not exists hospitals (
   sa3_name text,
   phn_code text,
   phn_name text,
-  notes text                       -- populated for the 5 no-coordinate rows and other caveats above
+  notes text,                      -- populated for the 5 no-coordinate rows and other caveats above
+
+  -- ED diversion opportunity score -- "which hospitals would benefit most
+  -- from a primary/urgent-care diversion play", as a function of (1) how
+  -- much low-urgency demand they're absorbing and (2) how overflowed they
+  -- are. Computed once (not a live view) from hospital_ed_metrics for a
+  -- single reference year, then percentile-ranked; re-run manually if a
+  -- newer year's data is added. Deliberately left null (not 0) for the 14/306
+  -- geocoded hospitals with incomplete 2024-25 data in hospital_ed_metrics --
+  -- unscored, not "no opportunity".
+  ed_score_year text,                        -- the hospital_ed_metrics.year this score was computed from ('2024-25')
+  low_urgency_volume int,                    -- sum of presentations for category in ('Semi-Urgent','Non-Urgent'), ed_score_year
+  low_urgency_volume_percentile numeric,     -- percent_rank() of low_urgency_volume across scored hospitals, 0-100
+  overflow_rate numeric,                     -- 1 - pct_within_4hrs for category='All patients', ed_score_year -- higher = more overflowed
+  overflow_rate_percentile numeric,          -- percent_rank() of overflow_rate across scored hospitals, 0-100
+  diversion_opportunity_score numeric,       -- average of the two percentiles above (0-100) -- equal-weighted volume + overflow
+  diversion_opportunity_percentile numeric   -- percent_rank() of diversion_opportunity_score across scored hospitals, 0-100 -- what the map colours by
 );
 create index if not exists hospitals_location_idx on hospitals using gist (location);
+
+comment on column hospitals.diversion_opportunity_score is
+  'Equal-weighted average of low_urgency_volume_percentile and overflow_rate_percentile: how much low-urgency (Semi-Urgent/Non-Urgent) ED demand a hospital absorbs, combined with how overflowed it runs. Higher = better candidate for a primary/urgent-care diversion play. Null where hospital_ed_metrics lacks complete ed_score_year data (unscored, not zero opportunity).';
 
 update hospitals set location = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography
 where latitude is not null and longitude is not null and location is null;
@@ -1787,7 +1806,14 @@ create policy "public read" on hospital_ed_metrics for select using (true);
 --         'properties', jsonb_build_object(
 --           'HospitalName', hospital_name, 'MatchedName', matched_name, 'State', state,
 --           'Address', address, 'Suburb', suburb, 'SA3Code', sa3_code, 'SA3Name', sa3_name,
---           'PHNCode', phn_code, 'PHNName', phn_name, 'Source', source
+--           'PHNCode', phn_code, 'PHNName', phn_name, 'Source', source,
+--           'EDScoreYear', ed_score_year,
+--           'LowUrgencyVolume', low_urgency_volume,
+--           'LowUrgencyVolumePercentile', low_urgency_volume_percentile,
+--           'OverflowRate', overflow_rate,
+--           'OverflowRatePercentile', overflow_rate_percentile,
+--           'DiversionOpportunityScore', diversion_opportunity_score,
+--           'DiversionOpportunityPercentile', diversion_opportunity_percentile
 --         )
 --       )
 --     ), '[]'::jsonb)
@@ -1795,6 +1821,51 @@ create policy "public read" on hospital_ed_metrics for select using (true);
 --   from hospitals
 --   where location is not null;
 -- $function$
+
+-- ED diversion opportunity score -- one-off computation (not a trigger/view)
+-- populating the columns added to hospitals above, run against ed_score_year
+-- = '2024-25' (the latest complete year in hospital_ed_metrics at the time).
+-- percent_rank() can't be referenced directly in an UPDATE ... SET (Postgres:
+-- "window functions are not allowed in UPDATE"), so it's computed in a
+-- preceding CTE and joined back. round(double precision, int) also doesn't
+-- exist -- percent_rank()'s result is cast to ::numeric first. 292 of 306
+-- geocoded hospitals scored; the other 14 lack complete 2024-25 category
+-- coverage in hospital_ed_metrics and are left null (unscored, not zero
+-- opportunity) -- both hospitals and the map layer treat null distinctly
+-- from a low score (grey, not pale yellow).
+-- with year_data as (
+--   select hospital_name,
+--     sum(presentations) filter (where category in ('Semi-Urgent','Non-Urgent')) as low_urgency_volume,
+--     max(1 - pct_within_4hrs) filter (where category = 'All patients') as overflow_rate
+--   from hospital_ed_metrics
+--   where year = '2024-25'
+--   group by hospital_name
+--   having sum(presentations) filter (where category in ('Semi-Urgent','Non-Urgent')) is not null
+--     and max(1 - pct_within_4hrs) filter (where category = 'All patients') is not null
+-- ),
+-- ranked as (
+--   select *,
+--     (percent_rank() over (order by low_urgency_volume))::numeric * 100 as low_urgency_volume_percentile,
+--     (percent_rank() over (order by overflow_rate))::numeric * 100 as overflow_rate_percentile
+--   from year_data
+-- ),
+-- scored as (
+--   select *, round((low_urgency_volume_percentile + overflow_rate_percentile) / 2, 1) as diversion_opportunity_score
+--   from ranked
+-- ),
+-- final as (
+--   select *, round((percent_rank() over (order by diversion_opportunity_score))::numeric * 100, 1) as diversion_opportunity_percentile
+--   from scored
+-- )
+-- update hospitals h set
+--   ed_score_year = '2024-25',
+--   low_urgency_volume = f.low_urgency_volume,
+--   low_urgency_volume_percentile = round(f.low_urgency_volume_percentile, 1),
+--   overflow_rate = round(f.overflow_rate, 4),
+--   overflow_rate_percentile = round(f.overflow_rate_percentile, 1),
+--   diversion_opportunity_score = f.diversion_opportunity_score,
+--   diversion_opportunity_percentile = f.diversion_opportunity_percentile
+-- from final f where h.hospital_name = f.hospital_name;
 
 -- ed_lower_urgency_sa3 -- AIHW's "Use of emergency departments for lower
 -- urgency care" report, Table 4 (by SA3 of usual residence). Unlike

@@ -72,7 +72,7 @@ const State = {
     // lens chip always renders, reusing that chip mechanism instead of a
     // one-off UI element for what's effectively an always-available
     // reference boundary layer.
-    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false, phn: true },
+    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false, phn: true, noneLens: true },
     // "Limit regions" (plan Phase G) — SEIFA decile selection is browsable
     // without narrowing anything until this is switched on (workforce risk/
     // DPA already narrows immediately via its own pre-existing slider/
@@ -525,6 +525,13 @@ async function fetchPhnGeojson() {
     const supabase = await getSupabaseClient();
     const { data, error } = await supabase.rpc('get_phn_geojson');
     if (error) throw new Error(`Failed to load PHN geojson: ${error.message}`);
+    return data;
+}
+
+async function fetchHospitalsGeojson() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_hospitals_geojson');
+    if (error) throw new Error(`Failed to load hospitals geojson: ${error.message}`);
     return data;
 }
 
@@ -1015,8 +1022,10 @@ function renderClinicLayerCheckboxes() {
     document.querySelectorAll('.clinic-layer-toggle').forEach((el) => {
         const layer = el.dataset.layer;
         const isPrimary = layer === State.markets.current;
-        el.checked = isPrimary || State.activeClinicLayers.includes(layer);
-        el.disabled = isPrimary;
+        // Primary's checked state reflects actual pin visibility (toggleable,
+        // see toggleClinicLayer), not just "is this the scoring market" --
+        // those are no longer the same thing.
+        el.checked = isPrimary ? !!(map && map.getLayer && map.getLayer('clinics-clusters')) : State.activeClinicLayers.includes(layer);
     });
     // Clinic counts (plan Phase G) — only shown once that vertical's data
     // has actually been fetched at least once (lazy per-layer fetch, plan
@@ -1032,7 +1041,20 @@ function renderClinicLayerCheckboxes() {
 }
 
 async function toggleClinicLayer(layer, checked) {
-    if (layer === State.markets.current) return; // scoring market's own layer can't be toggled off from here
+    if (layer === State.markets.current) {
+        // Visibility-only toggle for the scoring market's own pins. Deliberately
+        // doesn't touch State.activeClinicLayers/clinicsByVertical -- composite
+        // scoring, filters and funnel counts all key off the scoring market
+        // being "active", not off whether its dots currently render on the
+        // map, so hiding the pins here must not unload or exclude its data.
+        if (checked) addPrimaryClinicLayers(layer); else removeClinicLayer(layer);
+        renderClinicLayerCheckboxes();
+        if (!document.getElementById('catalogue-modal-backdrop')?.classList.contains('hidden')) {
+            renderCatalogueNav();
+            renderCatalogueDetail(catalogueActiveCategory);
+        }
+        return;
+    }
 
     if (checked) {
         if (!State.activeClinicLayers.includes(layer)) State.activeClinicLayers.push(layer);
@@ -2302,6 +2324,174 @@ async function ensurePHNLayerInner() {
     }
 }
 
+// Hospitals -- a plain reference/point overlay like PHN, not a scoring
+// market or clinic layer (hospitals table has no format/billing/ownership,
+// its analytical value is the hospital_ed_metrics/ed_lower_urgency_sa3 FK
+// relationships, not composite scoring), so it doesn't go through
+// toggleClinicLayer(). Clustered source (same pattern as the GP/Physio/
+// aged-care clinic layers) since 306 points at national zoom needs
+// aggregation. In-flight-promise guard included from the start this time --
+// PHN shipped without one and hit a real race condition (page-load restores
+// the saved lens from two init paths, both calling ensurePHNLayer() before
+// either fetch resolved, both racing to add the same map source).
+let _hospitalsLayerLoad = null;
+async function ensureHospitalsLayer() {
+    if (map.getSource('hospitals')) {
+        ['hospitals-clusters', 'hospitals-cluster-count', 'hospitals-pins'].forEach((id) => {
+            map.setLayoutProperty(id, 'visibility', 'visible');
+        });
+        return;
+    }
+    if (_hospitalsLayerLoad) return _hospitalsLayerLoad;
+    _hospitalsLayerLoad = ensureHospitalsLayerInner().finally(() => { _hospitalsLayerLoad = null; });
+    return _hospitalsLayerLoad;
+}
+async function ensureHospitalsLayerInner() {
+    let geojson;
+    try {
+        geojson = await fetchHospitalsGeojson();
+    } catch (e) {
+        console.warn('hospitals geojson load failed:', e);
+        return;
+    }
+
+    // clusterProperties runs a running sum/count as points merge into a
+    // cluster, giving each cluster feature its own aggregate score --
+    // without this, colour-by-percentile would only be visible once zoomed
+    // in past clusterMaxZoom (individual pins), which defeats the point of
+    // a national "where are the hotspots" view. 14 hospitals lack a score
+    // (excluded from the underlying percentile calc for missing 2024-25
+    // data) -- their contribution is 0/0 (not counted), not treated as 0th
+    // percentile, so they don't silently drag a cluster's average down.
+    map.addSource('hospitals', {
+        type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50,
+        // clusterProperties' shape is [reduceExpression, mapExpression], not a
+        // single expression -- got this wrong the first time (silently
+        // produced clusters with neither property set, no console error,
+        // caught only by checking querySourceFeatures directly). mapExpression
+        // runs once per raw point; reduceExpression combines the running
+        // ['accumulated'] total with that point's mapped value, referenced via
+        // ['get', <this same property name>].
+        clusterProperties: {
+            'percentile_sum': [
+                ['+', ['accumulated'], ['get', 'percentile_sum']],
+                ['case', ['==', ['get', 'DiversionOpportunityPercentile'], null], 0, ['get', 'DiversionOpportunityPercentile']]
+            ],
+            'scored_count': [
+                ['+', ['accumulated'], ['get', 'scored_count']],
+                ['case', ['==', ['get', 'DiversionOpportunityPercentile'], null], 0, 1]
+            ]
+        }
+    });
+
+    // Sequential pale-yellow -> deep-red ramp, low -> high opportunity
+    // percentile. Grey for the 14 hospitals with no score (missing/suppressed
+    // 2024-25 data) -- same "unknown, not zero" convention used elsewhere in
+    // this app (e.g. ownership Unknown), not silently folded into the ramp.
+    const percentileRamp = (percentileExpr) => [
+        'interpolate', ['linear'], percentileExpr,
+        0, '#FFF3B0',
+        50, '#F4A259',
+        100, '#C0392B'
+    ];
+    const clusterColor = [
+        'case',
+        ['==', ['get', 'scored_count'], 0], '#9A9A9A',
+        percentileRamp(['/', ['get', 'percentile_sum'], ['max', ['get', 'scored_count'], 1]])
+    ];
+    const pinColor = [
+        'case',
+        ['==', ['get', 'DiversionOpportunityPercentile'], null], '#9A9A9A',
+        percentileRamp(['get', 'DiversionOpportunityPercentile'])
+    ];
+
+    addLayerSafe({
+        id: 'hospitals-clusters',
+        type: 'circle',
+        source: 'hospitals',
+        filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': clusterColor,
+            'circle-opacity': 0.85,
+            'circle-stroke-color': '#7A241C',
+            'circle-stroke-width': 1.5,
+            'circle-radius': [
+                'step', ['get', 'point_count'],
+                12, 25, 16, 100, 20, 500, 26
+            ]
+        }
+    });
+    addLayerSafe({
+        id: 'hospitals-cluster-count',
+        type: 'symbol',
+        source: 'hospitals',
+        filter: ['has', 'point_count'],
+        layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 11,
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
+        },
+        paint: { 'text-color': '#3a2c00' }
+    });
+    addLayerSafe({
+        id: 'hospitals-pins',
+        type: 'circle',
+        source: 'hospitals',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+            'circle-radius': 5,
+            'circle-color': pinColor,
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#7A241C'
+        }
+    });
+
+    map.on('mouseenter', 'hospitals-clusters', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'hospitals-clusters', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'hospitals-clusters', (e) => {
+        const feature = e.features[0];
+        const clusterId = feature.properties.cluster_id;
+        map.getSource('hospitals').getClusterExpansionZoom(clusterId, (err, zoom) => {
+            if (err) return;
+            map.easeTo({ center: feature.geometry.coordinates, zoom, duration: 500 });
+        });
+    });
+
+    const tooltip = document.getElementById('map-tooltip');
+    if (tooltip) {
+        map.on('mouseenter', 'hospitals-pins', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mousemove', 'hospitals-pins', (e) => {
+            if (!e.features.length) return;
+            const p = e.features[0].properties;
+            const scoreLine = p.DiversionOpportunityPercentile != null
+                ? `ED diversion opportunity: ${Math.round(p.DiversionOpportunityPercentile)}th percentile
+                   <br>Low-urgency volume: ${fmtInt(p.LowUrgencyVolume)} (${Math.round(p.LowUrgencyVolumePercentile)}th pctile) ·
+                   Over 4hrs: ${Math.round(p.OverflowRate * 100)}% (${Math.round(p.OverflowRatePercentile)}th pctile)`
+                : `No ${p.EDScoreYear || ''} ED diversion score (missing/suppressed data)`;
+            tooltip.innerHTML = `
+                <div class="map-tooltip-name">${p.MatchedName || p.HospitalName}</div>
+                <div class="map-tooltip-meta">${p.Suburb || ''} ${p.State || ''}<br>${scoreLine}</div>`;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.point.x + 14) + 'px';
+            tooltip.style.top  = (e.point.y + 14) + 'px';
+        });
+        map.on('mouseleave', 'hospitals-pins', () => {
+            map.getCanvas().style.cursor = '';
+            tooltip.style.display = 'none';
+        });
+    }
+}
+
+function removeHospitalsLayer() {
+    ['hospitals-pins', 'hospitals-cluster-count', 'hospitals-clusters'].forEach((id) => {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+    });
+}
+
+function toggleHospitalsLayer(checked) {
+    if (checked) ensureHospitalsLayer(); else removeHospitalsLayer();
+}
+
 // ============================================================
 // F-06 — Map view switching (Composite / Whitespace / SEIFA)
 // ============================================================
@@ -2339,7 +2529,13 @@ function setMapView(view) {
     }
 
     // Swap SA3 fill-color expression
-    if (view === 'whitespace') {
+    if (view === 'none') {
+        // Blank canvas -- no composite/tier/whatever data-driven colouring,
+        // just a flat neutral fill so region outlines stay visible as a
+        // base layer while point overlays (hospitals, aged care, etc.)
+        // stand out on top without competing with a saturated choropleth.
+        map.setPaintProperty('sa3-fill', 'fill-color', '#FFFFFF');
+    } else if (view === 'whitespace') {
         map.setPaintProperty('sa3-fill', 'fill-color', [
             'step', ['coalesce', ['get', 'Whitespace_Score'], 0],
             '#E8EFE9',         // 0
@@ -2449,6 +2645,19 @@ function renderLegend(view) {
     const titleEl = document.getElementById('legend-title');
     const bodyEl = document.getElementById('legend-content');
     if (!titleEl || !bodyEl) return;
+
+    if (view === 'none') {
+        titleEl.textContent = 'No colour applied';
+        bodyEl.innerHTML = `
+            <div class="tier-row-note">
+                <span style="color:var(--muted);font-size:10px;line-height:1.4">
+                    Blank base layer — region outlines only, no composite/tier/other scoring shown.
+                    Use the Clinic layers checkboxes above to overlay hospitals, aged care, etc.
+                </span>
+            </div>
+        `;
+        return;
+    }
 
     if (view === 'composite') {
         const isPct = State.tieringMode === 'percentile';
@@ -2931,7 +3140,13 @@ function renderCatalogueDetail(key) {
                 if (i.layerToggle) {
                     const layer = i.layerToggle;
                     const isPrimary = layer === State.markets.current;
-                    const checked = isPrimary || State.activeClinicLayers.includes(layer);
+                    // Primary's checked state reflects actual pin visibility now
+                    // (toggleable, same as Step 1's own checkbox) -- scoring
+                    // market status and pin visibility are no longer the same
+                    // thing, so this can't just be "isPrimary || ...".
+                    const checked = isPrimary
+                        ? !!(map && map.getLayer && map.getLayer('clinics-clusters'))
+                        : State.activeClinicLayers.includes(layer);
                     // Unlike seifa/workforce/gpBillings below, clinic layers apply the
                     // instant you click them (same as Step 1's own checkboxes) -- they're
                     // never staged, so "Load" never lights up for them. Without a visual
@@ -2942,11 +3157,11 @@ function renderCatalogueDetail(key) {
                         ? '<span class="catalogue-row-badge">Scoring market</span>'
                         : (checked ? '<span class="catalogue-row-badge catalogue-row-badge-live">On the map now</span>' : '');
                     const hint = isPrimary
-                        ? `${i.hint} — the scoring market's own layer is always on`
+                        ? `${i.hint} — the scoring market driving the composite score; its pins can be hidden from the map without affecting scoring`
                         : `${i.hint} — optional overlay, applies instantly on click, not part of "Load" below`;
                     return `
-                        <label class="catalogue-row${isPrimary ? ' locked' : ''}">
-                            <input type="checkbox" ${checked ? 'checked' : ''} ${isPrimary ? 'disabled' : ''} onchange="toggleClinicLayer('${layer}', this.checked)">
+                        <label class="catalogue-row">
+                            <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleClinicLayer('${layer}', this.checked)">
                             <div>
                                 <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
                                 <div class="catalogue-row-hint">${hint}</div>
@@ -3264,6 +3479,7 @@ async function toggleSeifaRegionLimit() {
 // lens is entered some other way (e.g. SEIFA via decile-chip selection
 // rather than a direct click on this chip).
 const DYNAMIC_LENS_CHIPS = [
+    { loadedKey: 'noneLens', lens: 'none', label: 'None' },
     { loadedKey: 'chainPenetration', lens: 'chainPenetration', label: 'Chain penetration' },
     { loadedKey: 'seifa', lens: 'seifa', label: 'SEIFA' },
     { loadedKey: 'phn', lens: 'phn', label: 'PHN' },
@@ -3702,7 +3918,14 @@ function getAllClinicInteractiveLayerIds() {
         if (layer === State.markets.current) return;
         ids.push(`clinics-${layer}-pins`, `clinics-${layer}-clusters`);
     });
-    return ids;
+    // The scoring market's own layer can now be hidden without switching
+    // markets (see toggleClinicLayer's primary-market branch), so
+    // clinics-corporate/etc. may genuinely not exist right now --
+    // queryRenderedFeatures throws if asked about a layer that isn't in the
+    // style, not just returns empty, so this must filter to what's actually
+    // present (confirmed live: unticking GP then clicking the map threw
+    // "clinics-corporate does not exist" before this filter was added).
+    return ids.filter((id) => map.getLayer(id));
 }
 
 // Hover/click wiring for a secondary (non-scoring) clinic layer — clicking

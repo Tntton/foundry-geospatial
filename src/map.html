@@ -552,7 +552,7 @@
                         <div class="acc-row">
                             <div class="rail-eyebrow">Clinic layers on map</div>
                             <div class="mmm-chip-grid clinic-layer-grid" id="clinic-layer-toggles">
-                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked disabled onchange="toggleClinicLayer('gp', this.checked)"><span class="clinic-layer-row-name">General Practice</span><span class="clinic-layer-count" id="clinic-layer-count-gp"></span></label>
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="gp" checked onchange="toggleClinicLayer('gp', this.checked)"><span class="clinic-layer-row-name">General Practice</span><span class="clinic-layer-count" id="clinic-layer-count-gp"></span></label>
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="physio" onchange="toggleClinicLayer('physio', this.checked)"><span class="clinic-layer-row-name">Physiotherapy</span><span class="clinic-layer-count" id="clinic-layer-count-physio"></span></label>
                                 <!-- Dental omitted deliberately -- 0 clinics loaded today, see comment above. -->
                                 <!-- Aged care lives in the clinics table (market_id='aged_care') same as
@@ -560,6 +560,12 @@
                                      doesn't feed the composite) -- an ordinary secondary clinic layer via
                                      toggleClinicLayer(), not a bespoke mechanism. -->
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="aged_care" onchange="toggleClinicLayer('aged_care', this.checked)"><span class="clinic-layer-row-name">Aged Care Providers</span><span class="clinic-layer-count" id="clinic-layer-count-aged_care"></span></label>
+                                <!-- Hospitals is its own table (not clinics) -- no scoring market
+                                     shape (format/billing/ownership), its analytical value is the
+                                     hospital_ed_metrics/ed_lower_urgency_sa3 FK relationships, so it
+                                     uses the standalone ensureHospitalsLayer() pattern like PHN, not
+                                     toggleClinicLayer(). -->
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" onchange="toggleHospitalsLayer(this.checked)"><span class="clinic-layer-row-name">Hospitals</span></label>
                             </div>
                         </div>
 
@@ -2001,7 +2007,7 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr56"></script>
+<script src="js/app.js?v=rr62"></script>
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
