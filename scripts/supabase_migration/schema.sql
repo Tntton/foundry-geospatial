@@ -1546,11 +1546,28 @@ select
 from aged_care_providers
 on conflict (market_id, clinic_id) do nothing;
 -- Result: 2,933 of 2,933 rows inserted. The standalone aged_care_providers
--- table (and get_aged_care_providers_geojson()) were deliberately left in
--- place rather than dropped -- app.js still reads aged care via that table/
--- RPC (ensureAgedCareLayer()/fetchAgedCareGeojson()), not via clinics/
--- get_clinics('aged_care') yet. Wiring the app over to the unified path (and
--- then dropping the standalone table) is a separate, not-yet-done step.
+-- table (and get_aged_care_providers_geojson()) were initially left in place
+-- rather than dropped, since app.js still read aged care via that table/RPC
+-- at the time (ensureAgedCareLayer()/fetchAgedCareGeojson()). Both steps
+-- have since happened: app.js was rewired onto clinics/get_clinics
+-- ('aged_care') (see PR that follows this commit), and once that was
+-- confirmed working end-to-end, this table + its RPC were dropped as a
+-- deliberate architecture cleanup pass (alongside three unrelated dead views
+-- -- see below) rather than left duplicating clinics indefinitely:
+drop function if exists get_aged_care_providers_geojson();
+drop table if exists aged_care_providers;
+
+-- clinic_data_coverage / clinic_data_coverage_by_market / clinic_gp_count_reliability
+-- -- three views (not tables, so no duplicated storage, just unused schema
+-- surface) with zero references anywhere -- checked every function body in
+-- pg_proc and grepped app.js before dropping, not assumed dead. Likely
+-- predate renderArchetypeCoverageBars() computing the same field-coverage
+-- concept live client-side from State.clinicsByVertical. CASCADE needed:
+-- clinic_data_coverage_by_market depends on clinic_data_coverage (verified
+-- via pg_depend that nothing else does, so the cascade's blast radius is
+-- exactly these two).
+drop view if exists clinic_data_coverage cascade;
+drop view if exists clinic_gp_count_reliability;
 
 -- meta schema -- separates internal/reference tables (not queried by the
 -- app, no RLS policy, no PostgREST exposure since Supabase's default
@@ -1587,5 +1604,5 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('workforce_dpa', 'Workforce risk & DPA flags', 'sa3 (dpa_bonded, dpa_gp_img, workforce_risk_score columns)', 'DoctorConnect', null, null, 'DPA = Distribution Priority Area status; workforce_risk_score is a Foundry-derived composite'),
   ('ownership_chain_classification', 'Ownership mix & chain penetration (corporate vs independent)', 'clinics (ownership, corporate_chain columns)', 'Foundry classification', null, 'Mar 2025', null),
   ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
-  ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care); also still in standalone aged_care_providers (app.js not yet wired to the merged copy)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933)')
+  ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)')
 on conflict (dataset_key) do nothing;
