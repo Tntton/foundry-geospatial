@@ -67,7 +67,12 @@ const State = {
     // loaded. Step 3 shows nothing but "required by the model" info by
     // default; loading one of these reveals its filter controls there and
     // (where colorable) a dynamic Colour-by chip.
-    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false },
+    // phn: true and permanent (not a staged/loadable catalogue item like the
+    // others here) -- just gates its DYNAMIC_LENS_CHIPS entry so the "PHN"
+    // lens chip always renders, reusing that chip mechanism instead of a
+    // one-off UI element for what's effectively an always-available
+    // reference boundary layer.
+    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false, phn: true },
     // "Limit regions" (plan Phase G) — SEIFA decile selection is browsable
     // without narrowing anything until this is switched on (workforce risk/
     // DPA already narrows immediately via its own pre-existing slider/
@@ -513,6 +518,13 @@ async function fetchSa2Geojson() {
     const supabase = await getSupabaseClient();
     const { data, error } = await supabase.rpc('get_sa2_geojson');
     if (error) throw new Error(`Failed to load sa2 geojson: ${error.message}`);
+    return data;
+}
+
+async function fetchPhnGeojson() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_phn_geojson');
+    if (error) throw new Error(`Failed to load PHN geojson: ${error.message}`);
     return data;
 }
 
@@ -2201,6 +2213,95 @@ async function ensureSEIFALayer() {
     applySeifaFilter();
 }
 
+// PHN (Primary Health Network) boundaries -- a categorical reference layer,
+// not a numeric score, so unlike whitespace/workforce/chainPenetration (which
+// recolour the existing sa3-fill using sa3's own properties) this is its own
+// source/layer, same lazy-fetch-once-then-toggle-visibility pattern as
+// ensureSEIFALayer() -- PHN geometry doesn't nest inside SA3 boundaries, so
+// there's no honest way to derive a per-SA3 PHN colour instead. 31 PHNs
+// nationally -- an evenly-spaced-hue palette (PHN_COLORS below) rather than a
+// hand-picked one, since no single/few-hue ramp can distinguish that many
+// categories.
+const PHN_COLORS = {
+    'PHN101': '#D36969', 'PHN102': '#B55F4A', 'PHN103': '#C67039', 'PHN104': '#C7A575',
+    'PHN105': '#C6A639', 'PHN106': '#B5B24A', 'PHN107': '#C2D369', 'PHN108': '#8FB54A',
+    'PHN109': '#79C639', 'PHN110': '#8AC775', 'PHN201': '#42C639', 'PHN202': '#4AB558',
+    'PHN203': '#69D38B', 'PHN204': '#4AB581', 'PHN205': '#39C69D', 'PHN206': '#75C7BF',
+    'PHN301': '#39B8C6', 'PHN302': '#4A96B5', 'PHN303': '#69A0D3', 'PHN304': '#4A6CB5',
+    'PHN305': '#394BC6', 'PHN306': '#7B75C7', 'PHN307': '#5E39C6', 'PHN401': '#7A4AB5',
+    'PHN402': '#AE69D3', 'PHN501': '#A44AB5', 'PHN502': '#C639C1', 'PHN503': '#C775B4',
+    'PHN601': '#C6398B', 'PHN701': '#B54A73', 'PHN801': '#D3697D'
+};
+// In-flight-call guard -- page load restores the saved lens (localStorage
+// 'fh.lens') from two separate init code paths (wireUI()'s restore-on-load
+// and the map-ready init's own setMapView(State.currentMapView)), so a fresh
+// load with 'phn' persisted calls this twice before either fetch resolves.
+// Both would pass the map.getSource('phn') check below and race to
+// map.addSource() a second time -- confirmed live ("There is already a
+// source with ID phn"), not hypothetical. Reusing the in-flight promise
+// instead of a plain boolean so a concurrent caller actually waits for the
+// real result rather than returning immediately as if the layer were ready.
+let _phnLayerLoad = null;
+async function ensurePHNLayer() {
+    if (map.getSource('phn')) {
+        map.setLayoutProperty('phn-fill', 'visibility', 'visible');
+        map.setLayoutProperty('phn-outline', 'visibility', 'visible');
+        return;
+    }
+    if (_phnLayerLoad) return _phnLayerLoad;
+    _phnLayerLoad = ensurePHNLayerInner().finally(() => { _phnLayerLoad = null; });
+    return _phnLayerLoad;
+}
+async function ensurePHNLayerInner() {
+
+    let geojson;
+    try {
+        geojson = await fetchPhnGeojson();
+    } catch (e) {
+        console.warn('PHN geojson load failed:', e);
+        return;
+    }
+
+    const colorMatch = ['match', ['get', 'PHNCode']];
+    Object.entries(PHN_COLORS).forEach(([code, color]) => colorMatch.push(code, color));
+    colorMatch.push('#CCCCCC'); // fallback for any unmapped code
+
+    map.addSource('phn', { type: 'geojson', data: geojson });
+    map.addLayer({
+        id: 'phn-fill',
+        type: 'fill',
+        source: 'phn',
+        layout: { visibility: 'visible' },
+        paint: { 'fill-color': colorMatch, 'fill-opacity': 0.55 }
+    }, 'clinics-corporate');
+    map.addLayer({
+        id: 'phn-outline',
+        type: 'line',
+        source: 'phn',
+        layout: { visibility: 'visible' },
+        paint: { 'line-color': '#FFFFFF', 'line-width': 0.6, 'line-opacity': 0.8 }
+    }, 'clinics-corporate');
+
+    const tooltip = document.getElementById('map-tooltip');
+    if (tooltip) {
+        map.on('mouseenter', 'phn-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mousemove', 'phn-fill', (e) => {
+            if (!e.features.length) return;
+            const p = e.features[0].properties;
+            tooltip.innerHTML = `
+                <div class="map-tooltip-name">${p.PHNName}</div>
+                <div class="map-tooltip-meta">${p.PHNCode}</div>`;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.point.x + 14) + 'px';
+            tooltip.style.top  = (e.point.y + 14) + 'px';
+        });
+        map.on('mouseleave', 'phn-fill', () => {
+            map.getCanvas().style.cursor = '';
+            tooltip.style.display = 'none';
+        });
+    }
+}
+
 // ============================================================
 // F-06 — Map view switching (Composite / Whitespace / SEIFA)
 // ============================================================
@@ -2216,7 +2317,7 @@ function setMapView(view) {
         if (disclosure) disclosure.classList.add('hidden');
     }
 
-    const sa3Vis = (view === 'seifa') ? 'none' : 'visible';
+    const sa3Vis = (view === 'seifa' || view === 'phn') ? 'none' : 'visible';
 
     ['sa3-fill', 'sa3-outline', 'sa3-outline-sel'].forEach(id => {
         if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', sa3Vis);
@@ -2228,6 +2329,13 @@ function setMapView(view) {
     } else if (map.getLayer('sa2-seifa-fill')) {
         map.setLayoutProperty('sa2-seifa-fill',    'visibility', 'none');
         map.setLayoutProperty('sa2-seifa-outline', 'visibility', 'none');
+    }
+
+    if (view === 'phn') {
+        ensurePHNLayer();
+    } else if (map.getLayer('phn-fill')) {
+        map.setLayoutProperty('phn-fill',    'visibility', 'none');
+        map.setLayoutProperty('phn-outline', 'visibility', 'none');
     }
 
     // Swap SA3 fill-color expression
@@ -2469,6 +2577,19 @@ function renderLegend(view) {
             <div class="tier-row-note">
                 <span style="color:var(--muted);font-size:10px;line-height:1.4">
                     Filter SA2s with the SEIFA decile slider above.
+                </span>
+            </div>
+        `;
+        return;
+    }
+
+    if (view === 'phn') {
+        titleEl.textContent = 'PHN (Primary Health Network)';
+        bodyEl.innerHTML = `
+            <div class="tier-row-note">
+                <span style="color:var(--muted);font-size:10px;line-height:1.4">
+                    31 PHNs nationally, each its own colour — hover a region for its name.
+                    Not a scored ramp; boundaries don't nest inside SA3s.
                 </span>
             </div>
         `;
@@ -3145,6 +3266,7 @@ async function toggleSeifaRegionLimit() {
 const DYNAMIC_LENS_CHIPS = [
     { loadedKey: 'chainPenetration', lens: 'chainPenetration', label: 'Chain penetration' },
     { loadedKey: 'seifa', lens: 'seifa', label: 'SEIFA' },
+    { loadedKey: 'phn', lens: 'phn', label: 'PHN' },
 ];
 
 function renderCatalogueLensChips() {

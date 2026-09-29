@@ -189,15 +189,20 @@ create index if not exists clinics_isochrone_geom_idx on clinics using gist (iso
 --       radiology_imaging, allied_health, doctor_names, format_confidence,
 --       ndis, telehealth, rank, segments, primary_segment, confidence,
 --       gp_count_last_scraped_at, gp_count_source_url, gp_count_confidence,
---       entity_name, business_name, abn, geocode_source, geocode_confidence
+--       entity_name, business_name, abn, geocode_source, geocode_confidence,
+--       phn_code, phn_name
 --     from clinics c
 --     where c.market_id = p_market_id
 --   ) t;
 -- $function$
--- (column list extended when aged_care_providers merged into clinics -- see
--- that migration block further down; re-apply this CREATE OR REPLACE if
+-- (column list extended when aged_care_providers merged into clinics, then
+-- again when phn_code/phn_name were backfilled onto clinics -- see those
+-- migration blocks further down; re-apply this CREATE OR REPLACE if
 -- get_clinics's live definition ever needs touching again, since it's a
--- fixed explicit column list, not select *)
+-- fixed explicit column list, not select *. The PHN backfill migration added
+-- the columns to clinics but didn't update this function -- same class of
+-- gap as the aged_care_providers merge hit, caught the same way: checking
+-- the client-visible output, not just the DB column, before calling it done.)
 
 -- sa3_scored -> sa3 (pure rename, safe immediately; data unaffected)
 alter table if exists sa3_scored rename to sa3;
@@ -1404,6 +1409,39 @@ from phn p
 where c.location is not null
   and c.phn_code is null
   and ST_Contains(p.geom_simplified::geometry, c.location::geometry);
+
+-- Same RLS gotcha as every other new table in this file -- phn had RLS
+-- auto-enabled but no policy (confirmed live: zero rows via the anon key,
+-- direct DB connection unaffected since RLS doesn't apply there), so
+-- get_phn_geojson() below returned data to me but not to the client until
+-- this was added.
+create policy "public read" on phn for select using (true);
+
+-- RPC the client fetches via supabase.rpc(...) for the "PHN" map lens (a
+-- categorical fill layer, not a numeric score -- see ensurePHNLayer() in
+-- app.js). Uses geom_simplified, not geom, same reasoning as avoiding
+-- isochrone_geom in get_clinics() below -- no need to ship full-precision
+-- coastline detail through to_jsonb/ST_AsGeoJSON for a fill layer that's
+-- never zoomed in close enough to need it.
+-- CREATE OR REPLACE FUNCTION public.get_phn_geojson()
+--  RETURNS jsonb LANGUAGE sql STABLE
+--  SET search_path TO 'public', 'extensions', 'pg_catalog'
+--  SET statement_timeout TO '30s'
+-- AS $function$
+--   select jsonb_build_object(
+--     'type', 'FeatureCollection',
+--     'features', coalesce(jsonb_agg(
+--       jsonb_build_object(
+--         'type', 'Feature',
+--         'geometry', ST_AsGeoJSON(geom_simplified)::jsonb,
+--         'properties', jsonb_build_object(
+--           'PHNCode', phn_code, 'PHNName', phn_name, 'State', state_code
+--         )
+--       )
+--     ), '[]'::jsonb)
+--   )
+--   from phn;
+-- $function$
 
 -- This project auto-enables RLS on new tables (confirmed live: sa3/clinics
 -- both already carry an identical "public read" policy this table didn't
