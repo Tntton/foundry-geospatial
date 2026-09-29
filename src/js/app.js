@@ -528,6 +528,13 @@ async function fetchPhnGeojson() {
     return data;
 }
 
+async function fetchHospitalsGeojson() {
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.rpc('get_hospitals_geojson');
+    if (error) throw new Error(`Failed to load hospitals geojson: ${error.message}`);
+    return data;
+}
+
 async function fetchMmmBenchmark() {
     const supabase = await getSupabaseClient();
     const { data, error } = await supabase.rpc('get_mmm_benchmark');
@@ -2300,6 +2307,121 @@ async function ensurePHNLayerInner() {
             tooltip.style.display = 'none';
         });
     }
+}
+
+// Hospitals -- a plain reference/point overlay like PHN, not a scoring
+// market or clinic layer (hospitals table has no format/billing/ownership,
+// its analytical value is the hospital_ed_metrics/ed_lower_urgency_sa3 FK
+// relationships, not composite scoring), so it doesn't go through
+// toggleClinicLayer(). Clustered source (same pattern as the GP/Physio/
+// aged-care clinic layers) since 306 points at national zoom needs
+// aggregation. In-flight-promise guard included from the start this time --
+// PHN shipped without one and hit a real race condition (page-load restores
+// the saved lens from two init paths, both calling ensurePHNLayer() before
+// either fetch resolved, both racing to add the same map source).
+let _hospitalsLayerLoad = null;
+async function ensureHospitalsLayer() {
+    if (map.getSource('hospitals')) {
+        ['hospitals-clusters', 'hospitals-cluster-count', 'hospitals-pins'].forEach((id) => {
+            map.setLayoutProperty(id, 'visibility', 'visible');
+        });
+        return;
+    }
+    if (_hospitalsLayerLoad) return _hospitalsLayerLoad;
+    _hospitalsLayerLoad = ensureHospitalsLayerInner().finally(() => { _hospitalsLayerLoad = null; });
+    return _hospitalsLayerLoad;
+}
+async function ensureHospitalsLayerInner() {
+    let geojson;
+    try {
+        geojson = await fetchHospitalsGeojson();
+    } catch (e) {
+        console.warn('hospitals geojson load failed:', e);
+        return;
+    }
+
+    map.addSource('hospitals', { type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50 });
+
+    addLayerSafe({
+        id: 'hospitals-clusters',
+        type: 'circle',
+        source: 'hospitals',
+        filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': '#C0392B',
+            'circle-opacity': 0.85,
+            'circle-stroke-color': '#7A241C',
+            'circle-stroke-width': 1.5,
+            'circle-radius': [
+                'step', ['get', 'point_count'],
+                12, 25, 16, 100, 20, 500, 26
+            ]
+        }
+    });
+    addLayerSafe({
+        id: 'hospitals-cluster-count',
+        type: 'symbol',
+        source: 'hospitals',
+        filter: ['has', 'point_count'],
+        layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 11,
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
+        },
+        paint: { 'text-color': '#FFFFFF' }
+    });
+    addLayerSafe({
+        id: 'hospitals-pins',
+        type: 'circle',
+        source: 'hospitals',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+            'circle-radius': 4,
+            'circle-color': '#C0392B',
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#7A241C'
+        }
+    });
+
+    map.on('mouseenter', 'hospitals-clusters', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'hospitals-clusters', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'hospitals-clusters', (e) => {
+        const feature = e.features[0];
+        const clusterId = feature.properties.cluster_id;
+        map.getSource('hospitals').getClusterExpansionZoom(clusterId, (err, zoom) => {
+            if (err) return;
+            map.easeTo({ center: feature.geometry.coordinates, zoom, duration: 500 });
+        });
+    });
+
+    const tooltip = document.getElementById('map-tooltip');
+    if (tooltip) {
+        map.on('mouseenter', 'hospitals-pins', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mousemove', 'hospitals-pins', (e) => {
+            if (!e.features.length) return;
+            const p = e.features[0].properties;
+            tooltip.innerHTML = `
+                <div class="map-tooltip-name">${p.MatchedName || p.HospitalName}</div>
+                <div class="map-tooltip-meta">${p.Suburb || ''} ${p.State || ''}</div>`;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.point.x + 14) + 'px';
+            tooltip.style.top  = (e.point.y + 14) + 'px';
+        });
+        map.on('mouseleave', 'hospitals-pins', () => {
+            map.getCanvas().style.cursor = '';
+            tooltip.style.display = 'none';
+        });
+    }
+}
+
+function removeHospitalsLayer() {
+    ['hospitals-pins', 'hospitals-cluster-count', 'hospitals-clusters'].forEach((id) => {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+    });
+}
+
+function toggleHospitalsLayer(checked) {
+    if (checked) ensureHospitalsLayer(); else removeHospitalsLayer();
 }
 
 // ============================================================
