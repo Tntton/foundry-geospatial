@@ -67,7 +67,7 @@ const State = {
     // loaded. Step 3 shows nothing but "required by the model" info by
     // default; loading one of these reveals its filter controls there and
     // (where colorable) a dynamic Colour-by chip.
-    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false, agedCareProviders: false },
+    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false },
     // "Limit regions" (plan Phase G) — SEIFA decile selection is browsable
     // without narrowing anything until this is switched on (workforce risk/
     // DPA already narrows immediately via its own pre-existing slider/
@@ -516,13 +516,6 @@ async function fetchSa2Geojson() {
     return data;
 }
 
-async function fetchAgedCareGeojson() {
-    const supabase = await getSupabaseClient();
-    const { data, error } = await supabase.rpc('get_aged_care_providers_geojson');
-    if (error) throw new Error(`Failed to load aged care geojson: ${error.message}`);
-    return data;
-}
-
 async function fetchMmmBenchmark() {
     const supabase = await getSupabaseClient();
     const { data, error } = await supabase.rpc('get_mmm_benchmark');
@@ -671,6 +664,36 @@ const LEGACY_COLUMN_MAP = {
         state_code: row.state_code,
         postcode: row.postcode,
         website: row.website,
+    }),
+    // Never a scoring market (see markets.config for aged_care -- {"scored": false}),
+    // only ever loaded as a secondary layer via toggleClinicLayer() -- no
+    // format/billing/ownership fields exist for this vertical yet, so there's
+    // nothing to map for them (normalizeClinicData's Unknown/Small fallbacks
+    // apply, same as any market missing a field, but never rendered since
+    // secondary layers don't colour-by-ownership or filter by format/billing).
+    aged_care: (row) => ({
+        clinic_id: row.clinic_id,
+        clinic_name: row.name,
+        address: row.address,
+        suburb: row.suburb,
+        state_code: row.state_code,
+        state_name: row.state_name,
+        postcode: row.postcode,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        sa1_code: row.sa1_code,
+        sa2_code: row.sa2_code,
+        sa2_name: row.sa2_name,
+        sa2_area_km2: row.sa2_area_km2,
+        sa3_code: row.sa3_code,
+        sa3_name: row.sa3_name,
+        sa4_code: row.sa4_code,
+        sa4_name: row.sa4_name,
+        entity_name: row.entity_name,
+        business_name: row.business_name,
+        abn: row.abn,
+        geocode_source: row.geocode_source,
+        geocode_confidence: row.geocode_confidence,
     }),
 };
 
@@ -988,7 +1011,7 @@ function renderClinicLayerCheckboxes() {
     // Phase E); there's no lightweight count-only query to prefetch all
     // three up front, so an un-toggled layer's count stays blank until its
     // first load rather than guessing a number.
-    ['gp', 'physio', 'dental'].forEach((layer) => {
+    ['gp', 'physio', 'dental', 'aged_care'].forEach((layer) => {
         const el = document.getElementById('clinic-layer-count-' + layer);
         if (!el) return;
         const cached = State.clinicsByVertical[layer];
@@ -2178,114 +2201,6 @@ async function ensureSEIFALayer() {
     applySeifaFilter();
 }
 
-// Aged-care provider pins (Data Catalogue, Competition > Adjacent Providers)
-// — a plain reference overlay, not a scoring market or a clinic layer, so it
-// deliberately doesn't touch State.activeClinicLayers/clinicsByVertical
-// (that machinery is specifically for the GP/Physio/Dental market concept).
-// Same lazy-fetch-once-then-toggle-visibility pattern as ensureSEIFALayer().
-async function ensureAgedCareLayer() {
-    if (map.getSource('aged-care')) {
-        ['aged-care-clusters', 'aged-care-cluster-count', 'aged-care-pins'].forEach((id) => {
-            map.setLayoutProperty(id, 'visibility', 'visible');
-        });
-        return;
-    }
-
-    let geojson;
-    try {
-        geojson = await fetchAgedCareGeojson();
-    } catch (e) {
-        console.warn('aged care geojson load failed:', e);
-        return;
-    }
-
-    // Same clustered-GeoJSON-source pattern as the GP/Physio/Dental clinic
-    // layers (buildClinicLayerSource) — without it, zooming out at national
-    // scale renders 2,900+ individual dots instead of aggregate bubbles.
-    map.addSource('aged-care', { type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50 });
-
-    addLayerSafe({
-        id: 'aged-care-clusters',
-        type: 'circle',
-        source: 'aged-care',
-        filter: ['has', 'point_count'],
-        paint: {
-            'circle-color': '#FFC000',
-            'circle-opacity': 0.85,
-            'circle-stroke-color': '#7A5800',
-            'circle-stroke-width': 1.5,
-            'circle-radius': [
-                'step', ['get', 'point_count'],
-                12, 25, 16, 100, 20, 500, 26
-            ]
-        }
-    });
-    addLayerSafe({
-        id: 'aged-care-cluster-count',
-        type: 'symbol',
-        source: 'aged-care',
-        filter: ['has', 'point_count'],
-        layout: {
-            'text-field': ['get', 'point_count_abbreviated'],
-            'text-size': 11,
-            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
-        },
-        paint: { 'text-color': '#3a2c00' }
-    });
-    addLayerSafe({
-        id: 'aged-care-pins',
-        type: 'circle',
-        source: 'aged-care',
-        filter: ['!', ['has', 'point_count']],
-        paint: {
-            'circle-radius': 4,
-            'circle-color': '#FFC000',
-            'circle-stroke-width': 1,
-            'circle-stroke-color': '#7A5800'
-        }
-    });
-
-    map.on('mouseenter', 'aged-care-clusters', () => { map.getCanvas().style.cursor = 'pointer'; });
-    map.on('mouseleave', 'aged-care-clusters', () => { map.getCanvas().style.cursor = ''; });
-    map.on('click', 'aged-care-clusters', (e) => {
-        const feature = e.features[0];
-        const clusterId = feature.properties.cluster_id;
-        map.getSource('aged-care').getClusterExpansionZoom(clusterId, (err, zoom) => {
-            if (err) return;
-            map.easeTo({ center: feature.geometry.coordinates, zoom, duration: 500 });
-        });
-    });
-
-    const tooltip = document.getElementById('map-tooltip');
-    if (tooltip) {
-        map.on('mouseenter', 'aged-care-pins', () => { map.getCanvas().style.cursor = 'pointer'; });
-        map.on('mousemove', 'aged-care-pins', (e) => {
-            if (!e.features.length) return;
-            const p = e.features[0].properties;
-            tooltip.innerHTML = `
-                <div class="map-tooltip-name">${p.HomeName}</div>
-                <div class="map-tooltip-meta">
-                    ${p.Suburb} ${p.State} · ${p.EntityName}
-                    ${p.GeocodeSource === 'mapbox' ? ' · Mapbox-geocoded, verify before relying on this pin' : ''}
-                </div>`;
-            tooltip.style.display = 'block';
-            tooltip.style.left = (e.point.x + 14) + 'px';
-            tooltip.style.top  = (e.point.y + 14) + 'px';
-        });
-        map.on('mouseleave', 'aged-care-pins', () => {
-            map.getCanvas().style.cursor = '';
-            tooltip.style.display = 'none';
-        });
-    }
-}
-
-function removeAgedCareLayer() {
-    ['aged-care-pins', 'aged-care-cluster-count', 'aged-care-clusters'].forEach((id) => {
-        if (map.getLayer(id)) map.removeLayer(id);
-    });
-    if (map.getSource('aged-care')) map.removeSource('aged-care');
-}
-
 // ============================================================
 // F-06 — Map view switching (Composite / Whitespace / SEIFA)
 // ============================================================
@@ -2707,7 +2622,7 @@ function renderClinicLayerLegend() {
     const row = document.getElementById('clinic-layer-legend-row');
     const el = document.getElementById('clinic-layer-legend');
     if (!row || !el) return;
-    const labels = { gp: 'General Practice', physio: 'Physiotherapy', dental: 'Dental' };
+    const labels = { gp: 'General Practice', physio: 'Physiotherapy', dental: 'Dental', aged_care: 'Aged Care Providers' };
     row.style.display = State.activeClinicLayers.length ? '' : 'none';
     el.innerHTML = State.activeClinicLayers.map((layer) => {
         const isPrimary = layer === State.markets.current;
@@ -2757,6 +2672,12 @@ const CATALOGUE_CATEGORIES = [
             { name: 'Sites & Business Counts', items: [
                 { label: 'General practice clinics', hint: 'NHSD · Mar 2025', layerToggle: 'gp', type: 'PINS' },
                 { label: 'Physiotherapy clinics', hint: 'NHSD · Mar 2025', layerToggle: 'physio', type: 'PINS' },
+                // Not yet a scoreable market (no market_id/config/composite
+                // pipeline of its own, just point locations) -- grouped here
+                // rather than under Competition because it reads like a
+                // clinic layer, not a competitive-landscape signal, and is a
+                // candidate vertical to properly stand up later.
+                { label: 'Aged-care provider locations', hint: 'Aged Care Quality and Safety Commission · Sep 2026 — 2,910 of 2,933 registered residential homes geocoded (G-NAF + Mapbox for G-NAF misses, medium-confidence or better only)', layerToggle: 'aged_care', type: 'PINS' },
             ]},
             { name: 'Density & Saturation', items: [
                 { label: 'Clinics per 10,000 residents', hint: 'Derived · NHSD × ABS ERP — the Supply input, feeds the composite', locked: true, type: 'REGION' },
@@ -2773,9 +2694,6 @@ const CATALOGUE_CATEGORIES = [
             { name: 'Ownership & Consolidation', items: [
                 { label: 'Ownership mix — corporate vs independent', hint: 'Foundry classification · Mar 2025 — feeds the composite', locked: true, type: 'REGION' },
                 { key: 'chainPenetration', label: 'Chain penetration by SA3', hint: 'Derived · NHSD × Foundry classification — % of clinics per SA3 belonging to an identified corporate chain (excludes independent/NGO/unclassified)', gpOnly: true, type: 'REGION' },
-            ]},
-            { name: 'Adjacent Providers', items: [
-                { key: 'agedCareProviders', immediate: true, label: 'Aged-care provider locations', hint: 'Aged Care Quality and Safety Commission · Sep 2026 — 2,910 of 2,933 registered residential homes geocoded (G-NAF + Mapbox for G-NAF misses, medium-confidence or better only) — also toggleable from Step 1’s clinic layers, applies instantly, not part of "Load" below', type: 'PINS' },
             ]},
         ],
     },
@@ -2806,11 +2724,11 @@ const CATALOGUE_BUNDLES = [
 // visibility — used to reset a bundle cleanly (anything not in the bundle's
 // `loads` gets explicitly unloaded, not just left alone).
 function allCatalogueOptionalKeys() {
-    // Excludes immediate items (same reason layerToggle items are already
-    // excluded via not having a .key at all) -- they apply the instant
-    // you click them, never staged, so they must never count toward the
-    // Load button's "N changes staged" total.
-    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) => s.items.filter((i) => i.key && !i.immediate).map((i) => i.key)));
+    // layerToggle items are excluded via not having a .key at all -- they
+    // apply the instant you click them (see toggleClinicLayer), never
+    // staged, so they must never count toward the Load button's "N changes
+    // staged" total.
+    return CATALOGUE_CATEGORIES.flatMap((cat) => cat.sections.flatMap((s) => s.items.filter((i) => i.key).map((i) => i.key)));
 }
 
 // Labels of items that are always active and genuinely feed the composite
@@ -2858,7 +2776,6 @@ function renderCatalogueNav() {
         const lockedCount = allItems.filter((i) => i.locked || (i.layerToggle && i.layerToggle === State.markets.current)).length;
         const loadedCount = allItems.filter((i) => {
             if (i.layerToggle) return i.layerToggle === State.markets.current || State.activeClinicLayers.includes(i.layerToggle);
-            if (i.immediate) return !!State.catalogueLoaded[i.key];
             return i.locked || catalogueStaged[i.key];
         }).length;
         return `
@@ -2912,23 +2829,6 @@ function renderCatalogueDetail(key) {
                             <div>
                                 <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
                                 <div class="catalogue-row-hint">${hint}</div>
-                            </div>
-                        </label>
-                    `;
-                }
-                if (i.immediate) {
-                    // Same immediate-effect convention as layerToggle above,
-                    // for items that aren't a GP/Physio/Dental clinic layer
-                    // but still apply the instant you click them (e.g. the
-                    // aged-care overlay, also toggleable from Step 1).
-                    const checked = !!State.catalogueLoaded[i.key];
-                    const badge = checked ? '<span class="catalogue-row-badge catalogue-row-badge-live">On the map now</span>' : '';
-                    return `
-                        <label class="catalogue-row">
-                            <input type="checkbox" data-key="${i.key}" ${checked ? 'checked' : ''} onchange="toggleImmediateCatalogueItem('${i.key}', this.checked)">
-                            <div>
-                                <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
-                                <div class="catalogue-row-hint">${i.hint}</div>
                             </div>
                         </label>
                     `;
@@ -3107,21 +3007,6 @@ function applyChainPenetrationToSa3Features(load) {
     if (map.getSource('sa3')) map.getSource('sa3').setData(State.sa3Data);
 }
 
-// Generic immediate-effect catalogue toggle -- for items that apply the
-// instant you click them (like layerToggle/toggleClinicLayer) but aren't a
-// GP/Physio/Dental clinic layer, so they don't belong in that market-
-// specific system. Refreshes the catalogue modal's own nav/detail too, same
-// as toggleClinicLayer does, in case it's open while Step 1's own checkbox
-// is what triggered this.
-function toggleImmediateCatalogueItem(key, checked) {
-    State.catalogueLoaded[key] = checked;
-    applyCatalogueLoadedState();
-    if (!document.getElementById('catalogue-modal-backdrop')?.classList.contains('hidden')) {
-        renderCatalogueNav();
-        renderCatalogueDetail(catalogueActiveCategory);
-    }
-}
-
 // Applies State.catalogueLoaded to the actual UI: Step 3 filter sections,
 // the dynamic Colour-by chip(s), and the GP Billings dropdown.
 function applyCatalogueLoadedState() {
@@ -3130,20 +3015,12 @@ function applyCatalogueLoadedState() {
     const seifaSection = document.getElementById('ses-remoteness-section');
     const workforceSection = document.getElementById('workforce-section');
     const chainPenetrationSection = document.getElementById('chain-penetration-section');
-    const agedCareSection = document.getElementById('aged-care-section');
     const extraFilters = document.getElementById('ground-extra-filters');
-    const anyLoaded = State.catalogueLoaded.seifa || State.catalogueLoaded.workforce || State.catalogueLoaded.gpBillings || State.catalogueLoaded.chainPenetration || State.catalogueLoaded.agedCareProviders;
+    const anyLoaded = State.catalogueLoaded.seifa || State.catalogueLoaded.workforce || State.catalogueLoaded.gpBillings || State.catalogueLoaded.chainPenetration;
 
     if (seifaSection) seifaSection.classList.toggle('hidden', !State.catalogueLoaded.seifa);
     if (chainPenetrationSection) chainPenetrationSection.classList.toggle('hidden', !State.catalogueLoaded.chainPenetration);
     applyChainPenetrationToSa3Features(State.catalogueLoaded.chainPenetration);
-    if (agedCareSection) agedCareSection.classList.toggle('hidden', !State.catalogueLoaded.agedCareProviders);
-    if (State.catalogueLoaded.agedCareProviders) ensureAgedCareLayer(); else removeAgedCareLayer();
-    // Two entry points drive the same State.catalogueLoaded.agedCareProviders
-    // flag (this Step 1 checkbox and the catalogue's own) -- keep this one
-    // in sync regardless of which one triggered the change.
-    const agedCareStep1Toggle = document.getElementById('aged-care-layer-toggle');
-    if (agedCareStep1Toggle) agedCareStep1Toggle.checked = State.catalogueLoaded.agedCareProviders;
     if (workforceSection) workforceSection.classList.toggle('hidden', !State.catalogueLoaded.workforce);
     if (extraFilters) extraFilters.classList.toggle('hidden', !anyLoaded);
     if (groundEmpty) {
@@ -3198,15 +3075,6 @@ function renderCatalogueDatasetControls() {
             <div class="catalogue-dataset-btn-row">
                 <button type="button" class="catalogue-dataset-btn" onclick="colourMapByDataset('chainPenetration')">Colour map by this</button>
                 <button type="button" class="catalogue-dataset-remove" onclick="removeCatalogueDataset('chainPenetration')" title="Remove chain penetration by SA3">✕</button>
-            </div>
-        ` : '';
-    }
-    const agedCareEl = document.getElementById('aged-care-dataset-controls');
-    if (agedCareEl) {
-        agedCareEl.innerHTML = State.catalogueLoaded.agedCareProviders ? `
-            <span class="catalogue-dataset-name">Aged-care provider locations</span>
-            <div class="catalogue-dataset-btn-row">
-                <button type="button" class="catalogue-dataset-remove" onclick="removeCatalogueDataset('agedCareProviders')" title="Remove aged-care provider locations">✕</button>
             </div>
         ` : '';
     }
@@ -7370,7 +7238,7 @@ function removeFilterChip(key) {
 // directly, it only proposes a plan. The lookups and helpers below are
 // used by that executor and by the plan-step description text in the
 // chat panel's UI.
-const COPILOT_MARKET_LABELS = { gp: 'General Practice', physio: 'Physiotherapy', dental: 'Dental' };
+const COPILOT_MARKET_LABELS = { gp: 'General Practice', physio: 'Physiotherapy', dental: 'Dental', aged_care: 'Aged Care Providers' };
 const COPILOT_CATALOGUE_LABELS = { seifa: 'SEIFA IRSAD decile', workforce: 'workforce risk & DPA flags', gpBillings: 'GP billing mix' };
 
 function copilotBbox(features) {

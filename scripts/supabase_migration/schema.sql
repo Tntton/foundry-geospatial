@@ -93,6 +93,13 @@ create table if not exists clinics (
   isochrone_color text,
   isochrone_opacity numeric,
   isochrone_metric text,
+  -- aged-care-specific (null for other markets) -- folded in from the standalone
+  -- aged_care_providers table (see the "merge into clinics" block further down)
+  entity_name text,
+  business_name text,
+  abn text,
+  geocode_source text,
+  geocode_confidence numeric,
   primary key (market_id, clinic_id)
 );
 -- for tables created before these columns existed
@@ -125,6 +132,11 @@ alter table clinics add column if not exists isochrone_contour_minutes int;
 alter table clinics add column if not exists isochrone_color text;
 alter table clinics add column if not exists isochrone_opacity numeric;
 alter table clinics add column if not exists isochrone_metric text;
+alter table clinics add column if not exists entity_name text;
+alter table clinics add column if not exists business_name text;
+alter table clinics add column if not exists abn text;
+alter table clinics add column if not exists geocode_source text;
+alter table clinics add column if not exists geocode_confidence numeric;
 alter table clinics drop column if exists extra;
 -- the 15 redundant per-segment booleans, superseded by the segments array
 alter table clinics drop column if exists womens_health_pelvic_health;
@@ -176,11 +188,16 @@ create index if not exists clinics_isochrone_geom_idx on clinics using gist (iso
 --       google_rating, nhsd_service_id, nhsd_service_type, pathology,
 --       radiology_imaging, allied_health, doctor_names, format_confidence,
 --       ndis, telehealth, rank, segments, primary_segment, confidence,
---       gp_count_last_scraped_at, gp_count_source_url, gp_count_confidence
+--       gp_count_last_scraped_at, gp_count_source_url, gp_count_confidence,
+--       entity_name, business_name, abn, geocode_source, geocode_confidence
 --     from clinics c
 --     where c.market_id = p_market_id
 --   ) t;
 -- $function$
+-- (column list extended when aged_care_providers merged into clinics -- see
+-- that migration block further down; re-apply this CREATE OR REPLACE if
+-- get_clinics's live definition ever needs touching again, since it's a
+-- fixed explicit column list, not select *)
 
 -- sa3_scored -> sa3 (pure rename, safe immediately; data unaffected)
 alter table if exists sa3_scored rename to sa3;
@@ -1257,8 +1274,18 @@ create table if not exists aged_care_providers (
   geocode_source text,   -- 'gnaf' | 'mapbox' | null (unresolved)
   geocode_confidence numeric,  -- 1.0 for gnaf; Mapbox's own relevance score (0-1) for mapbox
   sa3_code text,
-  sa3_name text
+  sa3_name text,
+  sa2_code text,
+  sa2_name text,
+  sa2_area_km2 numeric,
+  sa4_code text,
+  sa4_name text
 );
+alter table aged_care_providers add column if not exists sa2_code text;
+alter table aged_care_providers add column if not exists sa2_name text;
+alter table aged_care_providers add column if not exists sa2_area_km2 numeric;
+alter table aged_care_providers add column if not exists sa4_code text;
+alter table aged_care_providers add column if not exists sa4_name text;
 create index if not exists aged_care_providers_location_idx on aged_care_providers using gist (location);
 create index if not exists aged_care_providers_suburb_idx on aged_care_providers (suburb, state);
 
@@ -1273,6 +1300,110 @@ from sa3 s
 where p.location is not null
   and p.sa3_code is null
   and ST_Contains(s.geom::geometry, p.location::geometry);
+
+-- sa2_code/sa2_name/sa2_area_km2/sa4_code/sa4_name -- not a full scoring-market
+-- migration (no market_id, no composite/tier config, no supply metric exists
+-- in the ACQSC provider register to score against -- see the "should I merge
+-- into clinics" discussion this followed), just the geography hierarchy that
+-- was safely derivable from data already on hand: sa2 via the same
+-- ST_Contains point-in-polygon pattern as sa3 above (matches 2,902 of 2,933
+-- rows -- 23 have no coordinates at all, 8 sit on an sa2.geom boundary seam,
+-- same seam issue as the 3 sa3 misses), sa2_area_km2 from that sa2 polygon's
+-- own ST_Area, sa4_code by taking sa2_code's first 3 digits (ASGS 2021 codes
+-- are hierarchical -- verified 100% match, all 7,845 clinics rows with both
+-- codes set, not assumed), and sa4_name by joining clinics' own existing
+-- sa4_code->sa4_name pairs (verified consistent -- 0 sa4_codes with more than
+-- one distinct name across 89 codes -- and covers all 89 SA4s nationally, so
+-- every code aged care could derive already has a real name available,
+-- nothing invented). gccsa_code/gccsa_name were deliberately left out --
+-- spot-checking clinics' own values for these turned up inconsistent/dirty
+-- data (mixed code formats, some rows using the display name as the code),
+-- so there was no reliable existing source to derive from.
+update aged_care_providers p set
+  sa2_code = s.sa2_code,
+  sa2_name = s.sa2_name
+from sa2 s
+where p.location is not null
+  and p.sa2_code is null
+  and ST_Contains(s.geom::geometry, p.location::geometry);
+
+update aged_care_providers p set
+  sa2_area_km2 = ST_Area(s.geom) / 1000000.0
+from sa2 s
+where p.sa2_code = s.sa2_code
+  and p.sa2_area_km2 is null;
+
+update aged_care_providers set sa4_code = left(sa2_code, 3)
+where sa2_code is not null and sa4_code is null;
+
+update aged_care_providers p set sa4_name = lut.sa4_name
+from (select distinct sa4_code, sa4_name from clinics where sa4_code is not null) lut
+where p.sa4_code = lut.sa4_code
+  and p.sa4_name is null;
+
+-- phn -- PHN (Primary Health Network) boundaries, source: Digital Atlas of
+-- Australia (digital.atlas.gov.au/datasets/primary-health-networks), Dept of
+-- Health/Disability/Ageing, Aug 2023 vintage. The CSV export of this dataset
+-- (attribute table only -- OBJECTID/PHN_CODE/PHN_NAME/state/Shape__Area/
+-- Shape__Length, no geometry) is NOT enough to classify a clinic by PHN --
+-- there's no way to point-in-polygon match a suburb to 1-of-10 PHNs in a
+-- state from attributes alone. The GeoJSON export (same dataset, real
+-- MultiPolygon boundaries, EPSG:4326) is what this table is loaded from.
+--
+-- geom_simplified: the raw GeoJSON is extremely high-resolution -- 2.19M
+-- total vertices across just 31 polygons (Tasmania's PHN601 alone has
+-- 625,504, presumably tracing every coastal inlet) -- a plain ST_Contains
+-- join against `geom` timed out repeatedly against clinics (~19.6k rows),
+-- even at a 4-minute statement_timeout. ST_SimplifyPreserveTopology at a
+-- 0.001-degree (~100m) tolerance cut that to 141k vertices (~15x) and the
+-- same join completed in 57s -- 100m is far more precision than classifying
+-- which PHN a clinic sits in needs, nowhere near enough to matter for
+-- boundary-line rendering (not this table's job). Kept `geom` too, at full
+-- precision, in case something later actually needs it.
+create table if not exists phn (
+  phn_code text primary key,
+  phn_name text,
+  state_code text,
+  state_name text,
+  geom geography(MultiPolygon, 4326),
+  geom_simplified geography(MultiPolygon, 4326)
+);
+create index if not exists phn_geom_idx on phn using gist (geom);
+create index if not exists phn_geom_simplified_idx on phn using gist (geom_simplified);
+-- Load: for each of the 31 features in the GeoJSON, insert phn_code
+-- (PHN_CODE), phn_name (PHN_NAME), state_code (STE_CODE21), state_name
+-- (STE_NAME21), and geom = ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(<feature
+-- geometry>), 4326)) -- ST_Multi because some features are Polygon rather
+-- than MultiPolygon and the column is typed MultiPolygon. Then
+-- geom_simplified = ST_Multi(ST_SimplifyPreserveTopology(geom::geometry,
+-- 0.001))::geography.
+
+alter table clinics add column if not exists phn_code text;
+alter table clinics add column if not exists phn_name text;
+alter table aged_care_providers add column if not exists phn_code text;
+alter table aged_care_providers add column if not exists phn_name text;
+
+-- Matched 19,617 of 19,653 clinics (99.8%) and 2,910 of 2,933 aged care rows
+-- (all geocoded ones) -- spot-checked against known geography (e.g. Roma QLD
+-- -> Western Queensland, Wauchope NSW -> North Coast, Boolaroo NSW -> Hunter
+-- New England and Central Coast), all correct. Remaining misses are rows
+-- with no coordinates, or sitting on a phn.geom_simplified boundary seam --
+-- same class of edge case as the sa2/sa3 boundary misses above.
+update clinics c set
+  phn_code = p.phn_code,
+  phn_name = p.phn_name
+from phn p
+where c.location is not null
+  and c.phn_code is null
+  and ST_Contains(p.geom_simplified::geometry, c.location::geometry);
+
+update aged_care_providers c set
+  phn_code = p.phn_code,
+  phn_name = p.phn_name
+from phn p
+where c.location is not null
+  and c.phn_code is null
+  and ST_Contains(p.geom_simplified::geometry, c.location::geometry);
 
 -- This project auto-enables RLS on new tables (confirmed live: sa3/clinics
 -- both already carry an identical "public read" policy this table didn't
@@ -1308,3 +1439,115 @@ create policy "public read" on aged_care_providers for select using (true);
 --   from aged_care_providers
 --   where location is not null;
 -- $function$
+
+-- Merge aged_care_providers into clinics (market_id='aged_care') -- decided
+-- against earlier in the same session ("hold off until it's an actual scored
+-- market"), then explicitly requested anyway once the SA2/SA4 backfill above
+-- made the row shapes close enough to be worth unifying. Still not a scored
+-- market: no adjustment factors, no isochrones, no composite/tier config
+-- (scored: false) -- just a plain reference layer living in the same table
+-- as GP/Physio/Dental now, loaded the exact same way (toggleClinicLayer ->
+-- loadMarketData -> normalizeClinicData). clinics.market_id has an FK to
+-- markets(market_id), and config/canonical_fields are NOT NULL, so a
+-- placeholder markets row is required -- clinic_fields specifically IS read
+-- by normalizeClinicData() regardless of whether a market is scored (missing
+-- it threw "Cannot convert undefined or null to object" the first time this
+-- was wired up), so it still needs the same id/name/lat/lon/sa3 mapping
+-- physio/dental use, just no format/billing/ownership keys since aged care
+-- has none of those yet.
+insert into markets (market_id, market_name, config, canonical_fields)
+values ('aged_care', 'Aged Care Providers',
+        '{"scored": false, "note": "reference layer only, no composite/tier scoring yet",
+          "market_id": "aged_care", "market_name": "Aged Care Providers",
+          "clinic_fields": {"id": "clinic_id", "name": "clinic_name", "latitude": "latitude",
+                             "longitude": "longitude", "sa3_code": "sa3_code", "sa3_name": "sa3_name"}}'::jsonb,
+        '{}'::jsonb)
+on conflict (market_id) do nothing;
+
+-- entity_name/business_name/abn/geocode_source/geocode_confidence have no
+-- equivalent existing clinics column (added to the create table above too,
+-- for a fresh install) -- null for every GP/Physio/Dental row, same pattern
+-- as the existing gp-specific/physio-specific column groups.
+alter table clinics add column if not exists entity_name text;
+alter table clinics add column if not exists business_name text;
+alter table clinics add column if not exists abn text;
+alter table clinics add column if not exists geocode_source text;
+alter table clinics add column if not exists geocode_confidence numeric;
+
+-- state_code: aged_care_providers only ever stores the 8 real state/territory
+-- full names (verified: no "Other Territories" values, unlike clinics, which
+-- has that value mapping inconsistently to both WA and NSW) -- a plain,
+-- unambiguous 8-entry map, not guessed.
+-- corporate_chain/ownership/clinic_format/billing_type/gp_count and every
+-- other GP/Physio-specific column stay null here -- no source data exists yet
+-- to classify aged-care operators as chain/independent (see the "what columns
+-- does it need to fill" discussion earlier), so leaving them null keeps that
+-- gap honest instead of overloading entity_name into a field it doesn't mean.
+insert into clinics (
+  market_id, clinic_id, name, address, suburb, state_code, state_name, postcode,
+  latitude, longitude, location,
+  sa1_code, sa2_code, sa2_name, sa2_area_km2, sa3_code, sa3_name, sa4_code, sa4_name,
+  entity_name, business_name, abn, geocode_source, geocode_confidence
+)
+select
+  'aged_care', site_id, home_name, street, suburb,
+  case state
+    when 'Australian Capital Territory' then 'ACT'
+    when 'New South Wales' then 'NSW'
+    when 'Northern Territory' then 'NT'
+    when 'Queensland' then 'QLD'
+    when 'South Australia' then 'SA'
+    when 'Tasmania' then 'TAS'
+    when 'Victoria' then 'VIC'
+    when 'Western Australia' then 'WA'
+  end,
+  state, postcode,
+  latitude, longitude, location,
+  null, sa2_code, sa2_name, sa2_area_km2, sa3_code, sa3_name, sa4_code, sa4_name,
+  entity_name, business_name, abn, geocode_source, geocode_confidence
+from aged_care_providers
+on conflict (market_id, clinic_id) do nothing;
+-- Result: 2,933 of 2,933 rows inserted. The standalone aged_care_providers
+-- table (and get_aged_care_providers_geojson()) were deliberately left in
+-- place rather than dropped -- app.js still reads aged care via that table/
+-- RPC (ensureAgedCareLayer()/fetchAgedCareGeojson()), not via clinics/
+-- get_clinics('aged_care') yet. Wiring the app over to the unified path (and
+-- then dropping the standalone table) is a separate, not-yet-done step.
+
+-- meta schema -- separates internal/reference tables (not queried by the
+-- app, no RLS policy, no PostgREST exposure since Supabase's default
+-- "Exposed schemas" API setting only includes public/graphql_public) from
+-- the public schema's app-facing tables (clinics, sa3, etc., all queried
+-- live via supabase.rpc(...) with the anon key). Access-tier split, not a
+-- per-market or per-domain one -- see the per-market-table discussion this
+-- followed (kept clinics as one table + market_id, not split per vertical).
+create schema if not exists meta;
+
+-- dataset_registry -- a plain provenance log, not consumed by the app itself
+-- (no RPC, no client fetch). One row per dataset: where it came from, which
+-- table actually holds it, and any processing caveats -- a reference point
+-- so "what source did this come from" doesn't live only in scattered hint
+-- strings across CATALOGUE_CATEGORIES (app.js) or this session's memory.
+-- Add a row here whenever a new dataset gets uploaded.
+create table if not exists meta.dataset_registry (
+  dataset_key     text primary key,
+  display_name    text not null,
+  supabase_table  text,
+  source_name     text,
+  source_url      text,
+  vintage         text,
+  notes           text,
+  added_at        timestamptz default now()
+);
+
+insert into meta.dataset_registry (dataset_key, display_name, supabase_table, source_name, source_url, vintage, notes) values
+  ('clinics_gp', 'General practice clinics', 'clinics (market_id=gp)', 'National Health Services Directory (NHSD)', null, 'Mar 2025', null),
+  ('clinics_physio', 'Physiotherapy clinics', 'clinics (market_id=physio)', 'National Health Services Directory (NHSD)', null, 'Mar 2025', null),
+  ('clinics_dental', 'Dental clinics', 'clinics (market_id=dental)', 'National Health Services Directory (NHSD)', null, 'Mar 2025', 'Market slot exists but not yet populated (0 rows as of Sep 2026)'),
+  ('sa3_geography_population', 'SA3 boundaries + estimated resident population', 'sa3', 'ABS ASGS boundaries + ABS ERP', null, 'Jun 2024', 'Table was originally named sa3_scored'),
+  ('seifa', 'SEIFA IRSAD decile', 'sa2', 'ABS Census', null, '2021 Census', 'Table was originally named sa2_seifa'),
+  ('workforce_dpa', 'Workforce risk & DPA flags', 'sa3 (dpa_bonded, dpa_gp_img, workforce_risk_score columns)', 'DoctorConnect', null, null, 'DPA = Distribution Priority Area status; workforce_risk_score is a Foundry-derived composite'),
+  ('ownership_chain_classification', 'Ownership mix & chain penetration (corporate vs independent)', 'clinics (ownership, corporate_chain columns)', 'Foundry classification', null, 'Mar 2025', null),
+  ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
+  ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care); also still in standalone aged_care_providers (app.js not yet wired to the merged copy)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933)')
+on conflict (dataset_key) do nothing;
