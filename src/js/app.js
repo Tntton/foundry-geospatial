@@ -72,7 +72,7 @@ const State = {
     // lens chip always renders, reusing that chip mechanism instead of a
     // one-off UI element for what's effectively an always-available
     // reference boundary layer.
-    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false, phn: true },
+    catalogueLoaded: { seifa: false, workforce: false, gpBillings: false, chainPenetration: false, phn: true, noneLens: true },
     // "Limit regions" (plan Phase G) — SEIFA decile selection is browsable
     // without narrowing anything until this is switched on (workforce risk/
     // DPA already narrows immediately via its own pre-existing slider/
@@ -1022,8 +1022,10 @@ function renderClinicLayerCheckboxes() {
     document.querySelectorAll('.clinic-layer-toggle').forEach((el) => {
         const layer = el.dataset.layer;
         const isPrimary = layer === State.markets.current;
-        el.checked = isPrimary || State.activeClinicLayers.includes(layer);
-        el.disabled = isPrimary;
+        // Primary's checked state reflects actual pin visibility (toggleable,
+        // see toggleClinicLayer), not just "is this the scoring market" --
+        // those are no longer the same thing.
+        el.checked = isPrimary ? !!(map && map.getLayer && map.getLayer('clinics-clusters')) : State.activeClinicLayers.includes(layer);
     });
     // Clinic counts (plan Phase G) — only shown once that vertical's data
     // has actually been fetched at least once (lazy per-layer fetch, plan
@@ -1039,7 +1041,20 @@ function renderClinicLayerCheckboxes() {
 }
 
 async function toggleClinicLayer(layer, checked) {
-    if (layer === State.markets.current) return; // scoring market's own layer can't be toggled off from here
+    if (layer === State.markets.current) {
+        // Visibility-only toggle for the scoring market's own pins. Deliberately
+        // doesn't touch State.activeClinicLayers/clinicsByVertical -- composite
+        // scoring, filters and funnel counts all key off the scoring market
+        // being "active", not off whether its dots currently render on the
+        // map, so hiding the pins here must not unload or exclude its data.
+        if (checked) addPrimaryClinicLayers(layer); else removeClinicLayer(layer);
+        renderClinicLayerCheckboxes();
+        if (!document.getElementById('catalogue-modal-backdrop')?.classList.contains('hidden')) {
+            renderCatalogueNav();
+            renderCatalogueDetail(catalogueActiveCategory);
+        }
+        return;
+    }
 
     if (checked) {
         if (!State.activeClinicLayers.includes(layer)) State.activeClinicLayers.push(layer);
@@ -2461,7 +2476,13 @@ function setMapView(view) {
     }
 
     // Swap SA3 fill-color expression
-    if (view === 'whitespace') {
+    if (view === 'none') {
+        // Blank canvas -- no composite/tier/whatever data-driven colouring,
+        // just a flat neutral fill so region outlines stay visible as a
+        // base layer while point overlays (hospitals, aged care, etc.)
+        // stand out on top without competing with a saturated choropleth.
+        map.setPaintProperty('sa3-fill', 'fill-color', '#FFFFFF');
+    } else if (view === 'whitespace') {
         map.setPaintProperty('sa3-fill', 'fill-color', [
             'step', ['coalesce', ['get', 'Whitespace_Score'], 0],
             '#E8EFE9',         // 0
@@ -2571,6 +2592,19 @@ function renderLegend(view) {
     const titleEl = document.getElementById('legend-title');
     const bodyEl = document.getElementById('legend-content');
     if (!titleEl || !bodyEl) return;
+
+    if (view === 'none') {
+        titleEl.textContent = 'No colour applied';
+        bodyEl.innerHTML = `
+            <div class="tier-row-note">
+                <span style="color:var(--muted);font-size:10px;line-height:1.4">
+                    Blank base layer — region outlines only, no composite/tier/other scoring shown.
+                    Use the Clinic layers checkboxes above to overlay hospitals, aged care, etc.
+                </span>
+            </div>
+        `;
+        return;
+    }
 
     if (view === 'composite') {
         const isPct = State.tieringMode === 'percentile';
@@ -3053,7 +3087,13 @@ function renderCatalogueDetail(key) {
                 if (i.layerToggle) {
                     const layer = i.layerToggle;
                     const isPrimary = layer === State.markets.current;
-                    const checked = isPrimary || State.activeClinicLayers.includes(layer);
+                    // Primary's checked state reflects actual pin visibility now
+                    // (toggleable, same as Step 1's own checkbox) -- scoring
+                    // market status and pin visibility are no longer the same
+                    // thing, so this can't just be "isPrimary || ...".
+                    const checked = isPrimary
+                        ? !!(map && map.getLayer && map.getLayer('clinics-clusters'))
+                        : State.activeClinicLayers.includes(layer);
                     // Unlike seifa/workforce/gpBillings below, clinic layers apply the
                     // instant you click them (same as Step 1's own checkboxes) -- they're
                     // never staged, so "Load" never lights up for them. Without a visual
@@ -3064,11 +3104,11 @@ function renderCatalogueDetail(key) {
                         ? '<span class="catalogue-row-badge">Scoring market</span>'
                         : (checked ? '<span class="catalogue-row-badge catalogue-row-badge-live">On the map now</span>' : '');
                     const hint = isPrimary
-                        ? `${i.hint} — the scoring market's own layer is always on`
+                        ? `${i.hint} — the scoring market driving the composite score; its pins can be hidden from the map without affecting scoring`
                         : `${i.hint} — optional overlay, applies instantly on click, not part of "Load" below`;
                     return `
-                        <label class="catalogue-row${isPrimary ? ' locked' : ''}">
-                            <input type="checkbox" ${checked ? 'checked' : ''} ${isPrimary ? 'disabled' : ''} onchange="toggleClinicLayer('${layer}', this.checked)">
+                        <label class="catalogue-row">
+                            <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleClinicLayer('${layer}', this.checked)">
                             <div>
                                 <div class="catalogue-row-label">${i.label}${typeTag}${badge}</div>
                                 <div class="catalogue-row-hint">${hint}</div>
@@ -3386,6 +3426,7 @@ async function toggleSeifaRegionLimit() {
 // lens is entered some other way (e.g. SEIFA via decile-chip selection
 // rather than a direct click on this chip).
 const DYNAMIC_LENS_CHIPS = [
+    { loadedKey: 'noneLens', lens: 'none', label: 'None' },
     { loadedKey: 'chainPenetration', lens: 'chainPenetration', label: 'Chain penetration' },
     { loadedKey: 'seifa', lens: 'seifa', label: 'SEIFA' },
     { loadedKey: 'phn', lens: 'phn', label: 'PHN' },
