@@ -1605,10 +1605,10 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('ownership_chain_classification', 'Ownership mix & chain penetration (corporate vs independent)', 'clinics (ownership, corporate_chain columns)', 'Foundry classification', null, 'Mar 2025', null),
   ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
   ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)'),
-  ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_presentations + hospital_ed_seen_on_time + hospital_ed_timeliness', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_* section further down for the full geocoding provenance and data-quality-code notes -- not repeated here.')
+  ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here.')
 on conflict (dataset_key) do nothing;
 
--- hospitals + hospital_ed_presentations/seen_on_time/timeliness -- built to
+-- hospitals + hospital_ed_metrics -- built to
 -- support an "opportunity hospital" analysis (high low-urgency ED volume +
 -- high overflow/overcrowding = demand a GP-type provider could capture).
 -- Source: AIHW MyHospitals "Emergency department" extract, 4 sheets sharing
@@ -1685,82 +1685,93 @@ update hospitals h set phn_code = p.phn_code, phn_name = p.phn_name
 from phn p where h.location is not null and h.phn_code is null
   and ST_Contains(p.geom_simplified::geometry, h.location::geometry);
 
--- Three fact tables, one per AIHW measure, all keyed on (hospital_name,
--- year, ...) -- NOT folded into clinics like aged_care_providers was, since
--- this data is fundamentally a time series (one row per hospital PER YEAR
--- per category), not a snapshot entity clinics' one-row-per-facility shape
--- fits. hospital_ed_seen_on_time kept separate from hospital_ed_presentations
--- despite the similar (hospital, year, triage_category) grain because the
--- two sheets count different things -- "Presentations" includes every visit
--- type, "seen on time" explicitly excludes non-emergency-presentation
--- visits, so merging them would silently conflate two different
--- denominators. hospital_ed_timeliness merges the "within 4 hrs" and "time
--- in ED" sheets, which share the same (hospital, year, patient_cohort)
--- grain and are genuinely the same underlying fact, just split into two
--- CSV exports by MyHospitals.
+-- One fact table, not three. First cut had a separate table per AIHW sheet
+-- (presentations / seen-on-time / timeliness), reasoning that they measured
+-- different things at different grains. Revisited once actually querying
+-- the data: hospital_ed_seen_on_time's triage_category and
+-- hospital_ed_timeliness's patient_cohort turned out to share 5 of their 8
+-- values (Resuscitation/Emergency/Urgent/Semi-Urgent/Non-Urgent) -- it's the
+-- same underlying "category" dimension, just with patient_cohort adding 3
+-- admission-status-only values (All patients/Subsequently admitted/Not
+-- subsequently admitted) that have no triage equivalent. So one row per
+-- (hospital_name, year, category) genuinely fits all three sheets --
+-- category_type ('triage' | 'cohort_only') flags which of the 8 a row is.
+-- What's kept genuinely distinct (not merged into one column): presentations
+-- vs seen_on_time_presentations vs within_4hrs_presentations -- the
+-- "Presentations" sheet counts every visit type, "seen on time" explicitly
+-- excludes non-emergency-presentation visits, and "within 4 hrs" has its own
+-- count again -- three different denominators for what looks like the same
+-- number, so collapsing them into one column would have silently picked one
+-- and discarded the others' meaning.
 --
--- data_quality: AIHW privacy-suppresses small counts as "<5" -- presentations
--- set to 5 (data_quality='suppressed_lt5') per explicit instruction, rather
--- than left null or a fabricated-precise midpoint. "NP"/"NP†" (could not
--- be calculated) and "-" (nothing reported) are left null with their own
--- reason codes ('not_calculable' / 'not_reported') -- genuinely different
--- meanings from a suppressed-but-real count, not collapsed into one flag.
-create table if not exists hospital_ed_presentations (
-  hospital_name text references hospitals(hospital_name),
-  year text,
-  triage_category text,
-  presentations int,
-  data_quality text,
-  primary key (hospital_name, year, triage_category)
-);
-create index if not exists hospital_ed_presentations_hospital_idx on hospital_ed_presentations (hospital_name);
-
-create table if not exists hospital_ed_seen_on_time (
-  hospital_name text references hospitals(hospital_name),
-  year text,
-  triage_category text,
-  peer_group text,
-  presentations int,
-  pct_seen_on_time numeric,
-  peer_group_avg numeric,
-  data_quality text,
-  primary key (hospital_name, year, triage_category)
-);
-create index if not exists hospital_ed_seen_on_time_hospital_idx on hospital_ed_seen_on_time (hospital_name);
-
 -- median_minutes/p90_minutes parsed from AIHW's own display strings (e.g.
 -- "1 hrs 58 mins") into plain integer minutes for actual computation --
 -- median_display/p90_display kept alongside for exact-original-text display.
-create table if not exists hospital_ed_timeliness (
+-- These (and pct_within_4hrs) are only ever populated for the 8 patient_cohort
+-- values -- AIHW's "Time in ED" sheet never reports median/p90 time broken
+-- down by triage category, only by admission status, so median_minutes etc.
+-- are genuinely null on every category_type='triage' row -- confirmed
+-- against the source sheet before treating it as expected rather than a bug.
+--
+-- data_quality columns: AIHW privacy-suppresses small counts as "<5" --
+-- presentations set to 5 (data_quality='suppressed_lt5') per explicit
+-- instruction, rather than left null or a fabricated-precise midpoint.
+-- "NP"/"NP†" (could not be calculated) and "-" (nothing reported) are left
+-- null with their own reason codes ('not_calculable' / 'not_reported') --
+-- genuinely different meanings from a suppressed-but-real count, not
+-- collapsed into one flag. Three separate data_quality columns (one per
+-- source sheet) since a single hospital/year/category row can have one
+-- sheet's value suppressed and another's genuinely reported.
+create table if not exists hospital_ed_metrics (
   hospital_name text references hospitals(hospital_name),
   year text,
-  patient_cohort text,
+  category text,              -- 5 triage categories, or one of 3 admission-status cohorts
+  category_type text,         -- 'triage' | 'cohort_only'
   peer_group text,
-  presentations int,
+  presentations int,                    -- from "Presentations" sheet -- all visit types, triage rows only
+  presentations_data_quality text,
+  seen_on_time_presentations int,       -- from "Patients seen on time" sheet -- emergency-presentation visits only, triage rows only
+  pct_seen_on_time numeric,
+  pct_seen_on_time_peer_avg numeric,
+  seen_on_time_data_quality text,
+  within_4hrs_presentations int,        -- from "Time in ED - within 4 hrs" sheet -- all 8 category values
   pct_within_4hrs numeric,
   pct_within_4hrs_peer_avg numeric,
-  median_minutes int,
-  median_display text,
-  p90_minutes int,
-  p90_display text,
-  p90_peer_avg_minutes int,
-  data_quality text,
-  primary key (hospital_name, year, patient_cohort)
+  median_minutes int,          -- typical wait: minutes until 50% of this category had left the ED
+  median_display text,         -- same value, AIHW's original "X hrs Y mins" text
+  p90_minutes int,              -- worst-case wait: minutes until 90% had left (only the slowest 10% took longer) -- an overcrowding signal, not the typical experience
+  p90_display text,             -- same value, AIHW's original "X hrs Y mins" text
+  p90_peer_avg_minutes int,     -- average p90_minutes across similar-peer-group hospitals, for comparison
+  timeliness_data_quality text,
+  primary key (hospital_name, year, category)
 );
-create index if not exists hospital_ed_timeliness_hospital_idx on hospital_ed_timeliness (hospital_name);
+create index if not exists hospital_ed_metrics_hospital_idx on hospital_ed_metrics (hospital_name);
+
+-- Column comments (visible in Supabase Studio) so "p90" isn't unexplained
+-- jargon to anyone browsing the table -- median/p90 are the two ends of the
+-- same wait-time distribution (typical vs worst-case), not two unrelated
+-- metrics.
+comment on column hospital_ed_metrics.median_minutes is
+  'Typical wait: minutes until half (50%) of patients in this category had left the ED. The "middle" experience -- less skewed by a few very long stays than p90_minutes.';
+comment on column hospital_ed_metrics.median_display is
+  'Same value as median_minutes, kept as AIHW''s original "X hrs Y mins" text for display.';
+comment on column hospital_ed_metrics.p90_minutes is
+  'Worst-case wait: minutes until 90% of patients in this category had left the ED -- i.e. only the slowest 10% took longer than this. High p90 relative to median means a long tail of severely delayed patients (overcrowding signal), not necessarily a bad typical experience.';
+comment on column hospital_ed_metrics.p90_display is
+  'Same value as p90_minutes, kept as AIHW''s original "X hrs Y mins" text for display.';
+comment on column hospital_ed_metrics.p90_peer_avg_minutes is
+  'The average p90_minutes across other hospitals in the same peer_group (similar size/type), for comparison -- not this hospital''s own figure.';
 
 -- Same RLS-auto-enabled-with-no-policy gotcha every new table in this project
 -- has hit -- confirmed live, added before it silently broke the anon key.
 create policy "public read" on hospitals for select using (true);
-create policy "public read" on hospital_ed_presentations for select using (true);
-create policy "public read" on hospital_ed_seen_on_time for select using (true);
-create policy "public read" on hospital_ed_timeliness for select using (true);
+create policy "public read" on hospital_ed_metrics for select using (true);
 
 -- RPC for the map layer -- same convention as get_aged_care_providers_geojson
--- was, get_phn_geojson, etc. The three hospital_ed_* fact tables are read
--- directly via PostgREST (no RPC needed -- verified live: a plain
+-- was, get_phn_geojson, etc. hospital_ed_metrics is read directly via
+-- PostgREST (no RPC needed -- verified live: a plain
 -- ?hospital_name=eq....&order=year.desc query against the anon key works),
--- since they're already flat/filterable and don't need geometry conversion.
+-- since it's already flat/filterable and doesn't need geometry conversion.
 -- CREATE OR REPLACE FUNCTION public.get_hospitals_geojson()
 --  RETURNS jsonb LANGUAGE sql STABLE
 --  SET search_path TO 'public', 'extensions', 'pg_catalog'
