@@ -2355,7 +2355,55 @@ async function ensureHospitalsLayerInner() {
         return;
     }
 
-    map.addSource('hospitals', { type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50 });
+    // clusterProperties runs a running sum/count as points merge into a
+    // cluster, giving each cluster feature its own aggregate score --
+    // without this, colour-by-percentile would only be visible once zoomed
+    // in past clusterMaxZoom (individual pins), which defeats the point of
+    // a national "where are the hotspots" view. 14 hospitals lack a score
+    // (excluded from the underlying percentile calc for missing 2024-25
+    // data) -- their contribution is 0/0 (not counted), not treated as 0th
+    // percentile, so they don't silently drag a cluster's average down.
+    map.addSource('hospitals', {
+        type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50,
+        // clusterProperties' shape is [reduceExpression, mapExpression], not a
+        // single expression -- got this wrong the first time (silently
+        // produced clusters with neither property set, no console error,
+        // caught only by checking querySourceFeatures directly). mapExpression
+        // runs once per raw point; reduceExpression combines the running
+        // ['accumulated'] total with that point's mapped value, referenced via
+        // ['get', <this same property name>].
+        clusterProperties: {
+            'percentile_sum': [
+                ['+', ['accumulated'], ['get', 'percentile_sum']],
+                ['case', ['==', ['get', 'DiversionOpportunityPercentile'], null], 0, ['get', 'DiversionOpportunityPercentile']]
+            ],
+            'scored_count': [
+                ['+', ['accumulated'], ['get', 'scored_count']],
+                ['case', ['==', ['get', 'DiversionOpportunityPercentile'], null], 0, 1]
+            ]
+        }
+    });
+
+    // Sequential pale-yellow -> deep-red ramp, low -> high opportunity
+    // percentile. Grey for the 14 hospitals with no score (missing/suppressed
+    // 2024-25 data) -- same "unknown, not zero" convention used elsewhere in
+    // this app (e.g. ownership Unknown), not silently folded into the ramp.
+    const percentileRamp = (percentileExpr) => [
+        'interpolate', ['linear'], percentileExpr,
+        0, '#FFF3B0',
+        50, '#F4A259',
+        100, '#C0392B'
+    ];
+    const clusterColor = [
+        'case',
+        ['==', ['get', 'scored_count'], 0], '#9A9A9A',
+        percentileRamp(['/', ['get', 'percentile_sum'], ['max', ['get', 'scored_count'], 1]])
+    ];
+    const pinColor = [
+        'case',
+        ['==', ['get', 'DiversionOpportunityPercentile'], null], '#9A9A9A',
+        percentileRamp(['get', 'DiversionOpportunityPercentile'])
+    ];
 
     addLayerSafe({
         id: 'hospitals-clusters',
@@ -2363,7 +2411,7 @@ async function ensureHospitalsLayerInner() {
         source: 'hospitals',
         filter: ['has', 'point_count'],
         paint: {
-            'circle-color': '#C0392B',
+            'circle-color': clusterColor,
             'circle-opacity': 0.85,
             'circle-stroke-color': '#7A241C',
             'circle-stroke-width': 1.5,
@@ -2383,7 +2431,7 @@ async function ensureHospitalsLayerInner() {
             'text-size': 11,
             'text-font': ['Open Sans Semibold', 'Arial Unicode MS Regular']
         },
-        paint: { 'text-color': '#FFFFFF' }
+        paint: { 'text-color': '#3a2c00' }
     });
     addLayerSafe({
         id: 'hospitals-pins',
@@ -2391,8 +2439,8 @@ async function ensureHospitalsLayerInner() {
         source: 'hospitals',
         filter: ['!', ['has', 'point_count']],
         paint: {
-            'circle-radius': 4,
-            'circle-color': '#C0392B',
+            'circle-radius': 5,
+            'circle-color': pinColor,
             'circle-stroke-width': 1,
             'circle-stroke-color': '#7A241C'
         }
@@ -2415,9 +2463,14 @@ async function ensureHospitalsLayerInner() {
         map.on('mousemove', 'hospitals-pins', (e) => {
             if (!e.features.length) return;
             const p = e.features[0].properties;
+            const scoreLine = p.DiversionOpportunityPercentile != null
+                ? `ED diversion opportunity: ${Math.round(p.DiversionOpportunityPercentile)}th percentile
+                   <br>Low-urgency volume: ${fmtInt(p.LowUrgencyVolume)} (${Math.round(p.LowUrgencyVolumePercentile)}th pctile) ·
+                   Over 4hrs: ${Math.round(p.OverflowRate * 100)}% (${Math.round(p.OverflowRatePercentile)}th pctile)`
+                : `No ${p.EDScoreYear || ''} ED diversion score (missing/suppressed data)`;
             tooltip.innerHTML = `
                 <div class="map-tooltip-name">${p.MatchedName || p.HospitalName}</div>
-                <div class="map-tooltip-meta">${p.Suburb || ''} ${p.State || ''}</div>`;
+                <div class="map-tooltip-meta">${p.Suburb || ''} ${p.State || ''}<br>${scoreLine}</div>`;
             tooltip.style.display = 'block';
             tooltip.style.left = (e.point.x + 14) + 'px';
             tooltip.style.top  = (e.point.y + 14) + 'px';
@@ -3865,7 +3918,14 @@ function getAllClinicInteractiveLayerIds() {
         if (layer === State.markets.current) return;
         ids.push(`clinics-${layer}-pins`, `clinics-${layer}-clusters`);
     });
-    return ids;
+    // The scoring market's own layer can now be hidden without switching
+    // markets (see toggleClinicLayer's primary-market branch), so
+    // clinics-corporate/etc. may genuinely not exist right now --
+    // queryRenderedFeatures throws if asked about a layer that isn't in the
+    // style, not just returns empty, so this must filter to what's actually
+    // present (confirmed live: unticking GP then clicking the map threw
+    // "clinics-corporate does not exist" before this filter was added).
+    return ids.filter((id) => map.getLayer(id));
 }
 
 // Hover/click wiring for a secondary (non-scoring) clinic layer — clicking
