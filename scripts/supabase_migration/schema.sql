@@ -1955,3 +1955,33 @@ create table if not exists ed_lower_urgency_sa3 (
 create index if not exists ed_lower_urgency_sa3_sa3_idx on ed_lower_urgency_sa3 (sa3_code);
 
 create policy "public read" on ed_lower_urgency_sa3 for select using (true);
+
+-- In-app feedback widget -- bug reports / suggestions submitted from the
+-- floating "Feedback" button (see feedback-widget.js), so issues and ideas
+-- get captured in the moment instead of relying on someone remembering to
+-- message about it later.
+--
+-- Deliberately INSERT-ONLY for the anon key -- no "public read" policy (the
+-- convention every other table in this file uses). Feedback text may contain
+-- sensitive commentary about specific clinics/regions/deals, so unlike every
+-- read-only dataset table above, this one should NOT be fetchable by anyone
+-- holding the same public anon key embedded in the client -- only readable
+-- via the Supabase Studio / service role. Verified live: an anon-key REST
+-- insert succeeds (201) but the same key's read of that same row returns [].
+--
+-- submitted_by is State.user.email from the app's (separate) auth project,
+-- not a manually-typed field -- there's already a logged-in user by the time
+-- anyone can see the button, so asking them to retype their email would be
+-- pure friction. market/page_url/user_agent are auto-captured context to
+-- help reproduce a bug, not requested from the user either.
+create table if not exists feedback (
+  id bigint generated always as identity primary key,
+  created_at timestamptz not null default now(),
+  type text not null check (type in ('bug','suggestion','other')),
+  message text not null,
+  submitted_by text,   -- State.user?.email at submission time, null if unavailable
+  market text,          -- State.markets.current at submission time
+  page_url text,        -- window.location.href
+  user_agent text
+);
+create policy "public insert" on feedback for insert with check (true);

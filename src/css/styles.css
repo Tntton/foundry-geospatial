@@ -1339,6 +1339,111 @@ body.graph-panel-open .comparison-panel { right: calc(var(--graph-panel-w) + 6px
     color: var(--muted);
 }
 
+/* ============================================================
+ * Feedback widget — floating button + popover
+ *
+ * Fixed to the viewport (not scoped to .map-container/.app-main like the
+ * graph panel), so it's reachable from any view and never needs its own
+ * coexistence rule with the other panels -- it always renders on top,
+ * simply floating above whatever else is open.
+ * ============================================================ */
+.feedback-fab {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--sage-deep);
+    background: var(--white);
+    border: 1px solid var(--sage-light);
+    border-radius: 100px;
+    padding: 8px 14px;
+    cursor: pointer;
+}
+.feedback-fab:hover { border-color: var(--sage); background: var(--sage-tint); }
+
+.feedback-popover {
+    position: fixed;
+    bottom: 66px;
+    right: 20px;
+    z-index: 61;
+    width: 300px;
+    background: var(--white);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.feedback-popover-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.feedback-popover-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+.feedback-popover-close {
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 4px;
+}
+.feedback-popover-close:hover { color: var(--ink); }
+
+.feedback-type-row {
+    display: flex;
+    gap: 6px;
+}
+.feedback-type-chip {
+    flex: 1;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 6px 4px;
+    cursor: pointer;
+}
+.feedback-type-chip:hover { border-color: var(--sage); }
+.feedback-type-chip.selected {
+    background: var(--sage);
+    color: var(--white);
+    border-color: var(--sage);
+}
+
+.feedback-message {
+    width: 100%;
+    resize: vertical;
+    min-height: 70px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 8px;
+}
+.feedback-message:focus { outline: none; border-color: var(--sage); }
+
+.feedback-popover-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.feedback-status { font-size: 10.5px; color: var(--muted); }
+.feedback-status.success { color: var(--sage-deep); font-weight: 600; }
+.feedback-status.error { color: var(--tier-5); font-weight: 600; }
+
 .cop-panel-hdr {
     display: flex;
     align-items: center;

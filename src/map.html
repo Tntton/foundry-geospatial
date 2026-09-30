@@ -2024,11 +2024,33 @@
         </div>
     </div>
 </div>
+
+<!-- Floating feedback widget -- bug reports / suggestions, submittable from
+     anywhere in the app regardless of the current view (map/list/targets).
+     Fixed to the viewport, not scoped to .app-main, see feedback-widget.js. -->
+<button class="feedback-fab" id="feedback-fab" onclick="Feedback.toggle()" title="Report a bug or suggest an improvement">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2.5h10a1 1 0 011 1V9a1 1 0 01-1 1H6l-3 3v-3H2a1 1 0 01-1-1V3.5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+    Feedback
+</button>
+<aside class="feedback-popover hidden" id="feedback-popover">
+    <div class="feedback-popover-hdr">
+        <span class="feedback-popover-title">Send feedback</span>
+        <button class="feedback-popover-close" onclick="Feedback.close()" title="Close">✕</button>
+    </div>
+    <div class="feedback-type-row" id="feedback-type-row"></div>
+    <textarea class="feedback-message" id="feedback-message" rows="4" placeholder="What's the bug, or what would help?"></textarea>
+    <div class="feedback-popover-footer">
+        <span class="feedback-status" id="feedback-status"></span>
+        <button class="btn btn-primary" id="feedback-submit-btn" onclick="Feedback.submit()">Send</button>
+    </div>
+</aside>
+
 <script src="js/app.js?v=rr63"></script>
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
 <script src="js/components/graph-panel.js?v=2"></script>
+<script src="js/components/feedback-widget.js?v=1"></script>
 
 <script>
 // Initialize left rail UI on page load
