@@ -22,13 +22,20 @@
 // given percentile looks like.
 
 const HOSPITAL_GRAPH_FIELDS = [
-    { key: 'LowUrgencyVolume', label: 'Low-urgency ED volume', unit: 'presentations/yr', fmt: (v) => fmtInt(v) },
-    { key: 'MedianWaitMinutes', label: 'Median wait', unit: 'minutes', fmt: (v) => fmtInt(v) + ' min' },
-    { key: 'P90WaitMinutes', label: 'Worst-case (p90) wait', unit: 'minutes', fmt: (v) => fmtInt(v) + ' min' },
-    { key: 'OverflowRate', label: 'Overflow rate (over 4hrs)', unit: '%', fmt: (v) => fmtPct(v * 100) },
-    { key: 'LowUrgencyVolumePercentile', label: 'Low-urgency volume (percentile)', unit: 'percentile', fmt: (v) => fmtInt(v) + 'th pctile' },
-    { key: 'OverflowRatePercentile', label: 'Overflow rate (percentile)', unit: 'percentile', fmt: (v) => fmtInt(v) + 'th pctile' },
-    { key: 'DiversionOpportunityPercentile', label: 'Diversion opportunity', unit: 'percentile', fmt: (v) => fmtInt(v) + 'th pctile' }
+    { key: 'LowUrgencyVolume', label: 'Low-urgency ED volume', unit: 'presentations/yr', fmt: (v) => fmtInt(v),
+      description: 'Total Semi-Urgent and Non-Urgent ED presentations in 2024–25 — the lower-acuity caseload a GP or urgent care service could plausibly divert.' },
+    { key: 'MedianWaitMinutes', label: 'Median wait', unit: 'minutes', fmt: (v) => fmtInt(v) + ' min',
+      description: 'Typical ED wait: minutes until half of all patients had left the ED (2024–25, all triage categories combined).' },
+    { key: 'P90WaitMinutes', label: 'Worst-case (p90) wait', unit: 'minutes', fmt: (v) => fmtInt(v) + ' min',
+      description: 'Worst-case ED wait: minutes until 90% of patients had left — only the slowest 10% took longer. High relative to the median signals overcrowding, not just a slow typical visit.' },
+    { key: 'OverflowRate', label: 'Overflow rate (over 4hrs)', unit: '%', fmt: (v) => fmtPct(v * 100),
+      description: 'Share of ED presentations NOT seen within 4 hours (2024–25, all patients) — 1 minus the on-time rate. Higher means more overflowed.' },
+    { key: 'LowUrgencyVolumePercentile', label: 'Low-urgency volume (percentile)', unit: 'percentile', fmt: (v) => fmtInt(v) + 'th pctile',
+      description: 'Where this hospital ranks on low-urgency ED volume against all other scored hospitals, 0–100.' },
+    { key: 'OverflowRatePercentile', label: 'Overflow rate (percentile)', unit: 'percentile', fmt: (v) => fmtInt(v) + 'th pctile',
+      description: 'Where this hospital ranks on overflow rate against all other scored hospitals, 0–100.' },
+    { key: 'DiversionOpportunityPercentile', label: 'Diversion opportunity', unit: 'percentile', fmt: (v) => fmtInt(v) + 'th pctile',
+      description: 'Combined ranking (average of the volume and overflow percentiles) — what the map colours hospitals by. Higher means a better candidate for a primary/urgent-care diversion play.' }
 ];
 
 function graphFieldByKey(key) {
@@ -153,14 +160,13 @@ GraphPanel.renderFieldPicker = function () {
     const chip = (f) => `
         <div class="graph-field-chip ${GraphPanel._pendingChipKey === f.key ? 'pending' : ''}"
              draggable="true"
-             data-field-key="${f.key}"
-             title="${f.label}">${f.label}</div>`;
+             data-field-key="${f.key}">${f.label}</div>`;
     const dropZone = (axis, fieldKey) => {
         const f = graphFieldByKey(fieldKey);
         return `
         <div class="graph-axis-drop" data-axis="${axis}">
             <span class="graph-axis-drop-label">${axis.toUpperCase()} axis</span>
-            <span class="graph-axis-drop-value">${f ? f.label : 'Drop a field here'}</span>
+            <span class="graph-axis-drop-value" ${f ? `data-field-key="${f.key}"` : ''}>${f ? f.label : 'Drop a field here'}</span>
         </div>`;
     };
     el.innerHTML = `
@@ -185,6 +191,8 @@ GraphPanel.renderFieldPicker = function () {
             GraphPanel._pendingChipKey = (GraphPanel._pendingChipKey === key) ? null : key;
             GraphPanel.renderFieldPicker();
         });
+        chipEl.addEventListener('mousemove', (e) => GraphPanel.showFieldTooltip(e, chipEl.dataset.fieldKey));
+        chipEl.addEventListener('mouseleave', GraphPanel.hideFieldTooltip);
     });
     el.querySelectorAll('.graph-axis-drop').forEach((zoneEl) => {
         const axis = zoneEl.dataset.axis;
@@ -199,6 +207,10 @@ GraphPanel.renderFieldPicker = function () {
             GraphPanel.setAxisField(axis, GraphPanel._pendingChipKey);
             GraphPanel._pendingChipKey = null;
         });
+    });
+    el.querySelectorAll('.graph-axis-drop-value[data-field-key]').forEach((valEl) => {
+        valEl.addEventListener('mousemove', (e) => GraphPanel.showFieldTooltip(e, valEl.dataset.fieldKey));
+        valEl.addEventListener('mouseleave', GraphPanel.hideFieldTooltip);
     });
 };
 
@@ -292,6 +304,33 @@ GraphPanel.showTooltip = function (e, hospitalName) {
     const rect = body.getBoundingClientRect();
     tooltip.style.left = (e.clientX - rect.left + 14) + 'px';
     tooltip.style.top = (e.clientY - rect.top + 14) + 'px';
+};
+
+// Field description tooltip -- shown on hovering a field chip or an axis's
+// currently-assigned value (both in the header, so positioned relative to
+// .graph-panel as a whole rather than #graph-panel-body like the point
+// tooltip above).
+GraphPanel.showFieldTooltip = function (e, fieldKey) {
+    const tooltip = document.getElementById('graph-field-tooltip');
+    const panel = document.getElementById('graph-panel');
+    const field = graphFieldByKey(fieldKey);
+    if (!tooltip || !panel || !field || !field.description) return;
+    tooltip.innerHTML = `
+        <div class="graph-field-tooltip-title">${copilotEscapeHtml(field.label)}</div>
+        <div>${copilotEscapeHtml(field.description)}</div>`;
+    tooltip.classList.add('graph-field-tooltip');
+    tooltip.style.display = 'block';
+    const rect = panel.getBoundingClientRect();
+    // Flip to the left of the cursor near the panel's right edge so the
+    // (wrapping, ~240px wide) tooltip doesn't run off the panel.
+    const nearRightEdge = (e.clientX - rect.left) > rect.width - 260;
+    tooltip.style.left = nearRightEdge ? '' : (e.clientX - rect.left + 14) + 'px';
+    tooltip.style.right = nearRightEdge ? (rect.right - e.clientX + 14) + 'px' : '';
+    tooltip.style.top = (e.clientY - rect.top + 16) + 'px';
+};
+GraphPanel.hideFieldTooltip = function () {
+    const tooltip = document.getElementById('graph-field-tooltip');
+    if (tooltip) tooltip.style.display = 'none';
 };
 
 GraphPanel.hideTooltip = function () {

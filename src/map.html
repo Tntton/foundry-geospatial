@@ -18,7 +18,7 @@
     <!-- Supabase Auth -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=mob33" />
+    <link rel="stylesheet" href="css/styles.css?v=mob34" />
     <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
     <style>
         /* Hide login buttons */
@@ -957,6 +957,10 @@
             <aside class="graph-panel hidden" id="graph-panel">
                 <div class="graph-panel-hdr" id="graph-panel-hdr"></div>
                 <div class="graph-panel-body" id="graph-panel-body"></div>
+                <!-- Field description tooltip -- spans the whole panel (not
+                     scoped to graph-panel-body like #graph-tooltip is) since
+                     the field chips it describes live in the header. -->
+                <div class="graph-tooltip" id="graph-field-tooltip"></div>
             </aside>
 
             </div><!-- /subpanel-map -->
@@ -2024,7 +2028,7 @@
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
-<script src="js/components/graph-panel.js?v=1"></script>
+<script src="js/components/graph-panel.js?v=2"></script>
 
 <script>
 // Initialize left rail UI on page load

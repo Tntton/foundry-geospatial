@@ -1173,6 +1173,7 @@ body.graph-panel-open .comparison-panel { right: calc(var(--graph-panel-w) + 6px
 .graph-resize-handle:hover { background: var(--sage); }
 
 .graph-panel {
+    position: relative;
     flex-shrink: 0;
     width: var(--graph-panel-w);
     min-width: 320px;
@@ -1319,6 +1320,17 @@ body.graph-panel-open .comparison-panel { right: calc(var(--graph-panel-w) + 6px
     display: none;
 }
 .graph-tooltip-name { font-weight: 600; margin-bottom: 2px; }
+
+/* Field description tooltip (#graph-field-tooltip) -- unlike the point
+   hover tooltip above (a short one-liner, nowrap is right for it), a field
+   description is a full sentence and needs to wrap within the panel rather
+   than running off its edge. */
+.graph-field-tooltip {
+    white-space: normal;
+    max-width: 240px;
+    line-height: 1.4;
+}
+.graph-field-tooltip-title { font-weight: 600; margin-bottom: 3px; }
 .graph-tooltip-meta { color: rgba(255,255,255,0.65); font-family: var(--mono); font-size: 10px; letter-spacing: 0.03em; }
 
 .graph-panel-footnote {
