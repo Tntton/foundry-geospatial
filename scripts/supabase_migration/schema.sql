@@ -1606,6 +1606,7 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
   ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)'),
   ('pharmacies', 'Community pharmacy locations', 'clinics (market_id=pharmacy)', 'National Health Services Directory (NHSD)', null, 'Mar 2025', 'NHSD "Pharmacy service" rows only (5,526) -- "Hospital pharmacy service" rows (95, e.g. ''Belmont Hospital Pharmacy'') deliberately excluded as internal hospital departments, not standalone competing locations, already implicitly covered by the hospitals table. Loaded directly into clinics 2026-09-30 (same reference-layer pattern as aged_care -- markets.config {"scored": false}, no format/billing/ownership fields exist for this vertical); sa3: 5,522 of 5,526, sa2/sa4: 5,511 of 5,526 (ST_Contains boundary-seam misses, same class of gap as aged_care''s), phn: 5,526 of 5,526. get_clinics() needed no changes -- its existing explicit column list already covers every field this vertical uses.'),
+  ('radiology_clinics', 'Standalone radiology/imaging clinic locations', 'clinics (market_id=radiology)', 'ImagingFinder directory (imagingfinder.com.au)', null, 'Sep 2026', '1,001 of 1,196 scraped listings -- the 193 "Hospitals"-category rows (imaging departments inside hospitals, e.g. an SKG Radiology desk at a private hospital) excluded as internal departments already implicitly covered by the hospitals table, not standalone competing locations, same call as pharmacy''s hospital-pharmacy exclusion; 2 more excluded for having no coordinates at all in the source. Scraped via the site''s own public GeoDirectory JSON API (wp-json/geodir/v2/places), not HTML scraping -- confirmed permitted by robots.txt. Same reference-layer pattern as pharmacy (markets.config {"scored": false}); unlike pharmacy, ownership/corporate_chain ARE populated (from the directory''s own chain-category field -- 256 of 1,001 independent, no named chain) since this source actually has that signal. sa3/phn: 1,001 of 1,001 (100%), sa2/sa4: 996 of 1,001 (boundary-seam misses, same class of gap as every other table here). ownership=''Corporate'' is simply "does the directory list a named chain for it" -- a handful of independent-bucketed clinics are themselves small multi-site groups the directory didn''t give their own top-level category (e.g. "Queensland Radiology Specialists"), so treat this as a coarse signal, not a verified classification.'),
   ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here. ED diversion opportunity score (hospitals.diversion_opportunity_score etc.) is a Foundry-derived analytical layer computed from this data 2026-09-29 -- not a raw AIHW field -- see the hospitals table definition and the score-computation block further down.'),
   ('ed_lower_urgency_sa3', 'ED presentations for lower-urgency care, by SA3 of usual residence', 'ed_lower_urgency_sa3', 'AIHW Table 4 (Use of emergency departments for lower-urgency care, 2017-18 to 2024-25)', null, '2017-18 to 2024-25 (2024-25 partial, 52 of 340 SA3s reported so far)', 'See the ed_lower_urgency_sa3 section further down for the row-filtering, demographic_type, and data-quality-code notes -- not repeated here.')
 on conflict (dataset_key) do nothing;
@@ -1655,6 +1656,66 @@ on conflict (dataset_key) do nothing;
 -- sa3: 5,522 of 5,526; sa2/sa4: 5,511 of 5,526 (boundary-seam misses, same
 -- class of gap as aged_care's); phn: 5,526 of 5,526 (100%). gccsa_code/
 -- gccsa_name and sa1_code left null, same deliberate gaps as aged_care.
+
+-- Radiology clinics -- ImagingFinder directory (imagingfinder.com.au)
+-- scraped via its own public GeoDirectory JSON API
+-- (wp-json/geodir/v2/places, 12 pages x 100 -- confirmed permitted by
+-- robots.txt), not HTML scraping. Same reference-layer pattern as pharmacy
+-- (markets.config {"scored": false}, ordinary secondary clinic layer via
+-- toggleClinicLayer()). 1,196 scraped -> 1,001 loaded: 193 "Hospitals"
+-- category rows excluded (imaging departments inside hospitals, e.g. an
+-- SKG Radiology desk at a private hospital -- internal departments already
+-- implicitly covered by the hospitals table, not standalone competing
+-- locations, same call as pharmacy's hospital-pharmacy exclusion), 2 more
+-- excluded for having no coordinates at all in the source (rather than
+-- guessed via geocoding).
+--
+-- Unlike pharmacy, ownership/corporate_chain ARE populated: the source's
+-- own top-level "chain" category (e.g. "I-MED Radiology Network", "Lumus
+-- Imaging") maps directly to corporate_chain, with ownership='Corporate'
+-- when a named chain exists, else 'Independent' (256 of 1,001 -- the
+-- directory's "Other Imaging Clinics" catch-all bucket, not a real chain
+-- name, so left out of corporate_chain for those rows). This is a coarse
+-- signal, not a verified classification the way GP's chain-matching is --
+-- a handful of "independent" rows are themselves small multi-site groups
+-- (e.g. "Queensland Radiology Specialists", 4 locations) the directory
+-- never gave their own top-level category. rating/rating_count were left
+-- unmapped entirely -- every single one of the 1,001 rows had rating=0,
+-- meaning this directory has no working review feature, not that these are
+-- genuinely zero-review clinics; storing all-zeros in google_rating/
+-- google_review_count would misrepresent that as real review data.
+--
+-- insert into markets (market_id, market_name, config, canonical_fields)
+-- values ('radiology', 'Radiology',
+--         -- config.clinic_fields is NOT optional -- normalizeClinicData()
+--         -- (app.js) does Object.entries(config.clinic_fields) unconditionally.
+--         -- Missing it entirely (as this block's first draft did) throws
+--         -- "Cannot convert undefined or null to object" the instant the
+--         -- layer's checkbox is ticked -- caught live in the browser, fixed
+--         -- by copying pharmacy/aged_care's exact config shape below.
+--         '{"scored": false, "note": "reference layer only, no composite/tier scoring yet",
+--           "market_id": "radiology", "market_name": "Radiology",
+--           "clinic_fields": {"id": "clinic_id", "name": "clinic_name", "latitude": "latitude",
+--                              "longitude": "longitude", "sa3_code": "sa3_code", "sa3_name": "sa3_name"}}'::jsonb,
+--         '{}'::jsonb)
+-- on conflict (market_id) do nothing;
+--
+-- insert into clinics (
+--   market_id, clinic_id, name, address, suburb, state_code, state_name, postcode,
+--   latitude, longitude, phone, email, website, ownership, corporate_chain
+-- ) values (...)  -- one row per non-"Hospitals"-category, geocoded listing
+-- on conflict (market_id, clinic_id) do nothing;
+--
+-- Then location/sa3/state_code (derived from sa3.state for the 28 rows the
+-- source left blank)/sa2/sa2_area_km2/sa4_code/sa4_name/phn_code/phn_name
+-- were backfilled with the same ST_Contains / hierarchical-code-prefix /
+-- clinics-sourced-name-lookup queries as pharmacy/aged_care above -- not
+-- repeated here verbatim. Results: sa3/phn: 1,001 of 1,001 (100%); sa2/sa4:
+-- 996 of 1,001 (boundary-seam misses, same class of gap as every other
+-- table here). gccsa_code/gccsa_name and sa1_code left null, same
+-- deliberate gaps as pharmacy/aged_care. get_clinics() needed no changes --
+-- its existing explicit column list already covers every field this
+-- vertical populates.
 
 -- hospitals + hospital_ed_metrics -- built to
 -- support an "opportunity hospital" analysis (high low-urgency ED volume +
