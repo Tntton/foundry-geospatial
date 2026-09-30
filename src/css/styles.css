@@ -62,6 +62,7 @@
     --rail-w: 330px;
     --drawer-w: 420px;
     --copilot-w: 380px;
+    --graph-panel-w: 460px;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1142,6 +1143,201 @@ body.copilot-panel-open .detail-drawer { right: calc(var(--copilot-w) + 1px); }
    .cop-panel's 16, and would render directly on top of the chat panel
    instead of shifting aside like .detail-drawer does. */
 body.copilot-panel-open .comparison-panel { right: calc(var(--copilot-w) + 1px); }
+/* .comparison-panel is position:fixed (viewport-relative, not scoped to
+   .map-container like .detail-drawer/.cop-panel are -- confirmed live: it
+   otherwise renders flush against the browser's own right edge, on top of
+   .graph-panel, since fixed positioning ignores the flex layout entirely
+   that .graph-panel relies on to make room). +6px = the 5px resize handle
+   plus 1px, matching the existing +1px convention above. */
+body.graph-panel-open .comparison-panel { right: calc(var(--graph-panel-w) + 6px); }
+
+/* ============================================================
+ * Graph panel — scatter plot, side-by-side with the map
+ *
+ * Unlike .detail-drawer/.cop-panel (position:absolute overlays that slide on
+ * top of the map), .graph-panel is a real flex sibling of .map-container
+ * inside #subpanel-map (itself flex, see .map-subpanel) -- so it genuinely
+ * shares the row with the map rather than covering it. .map-container's
+ * existing `flex:1; min-width:0` shrinks automatically to make room; no
+ * changes needed there. Scoped inside #subpanel-map (not one level up in
+ * .map-body-row) so it's automatically hidden whenever the List/Targets tab
+ * is active, same as .map-container itself.
+ * ============================================================ */
+.graph-resize-handle {
+    flex-shrink: 0;
+    width: 5px;
+    cursor: col-resize;
+    background: var(--hairline);
+    transition: background 0.15s;
+}
+.graph-resize-handle:hover { background: var(--sage); }
+
+.graph-panel {
+    position: relative;
+    flex-shrink: 0;
+    width: var(--graph-panel-w);
+    min-width: 320px;
+    max-width: 800px;
+    background: var(--white);
+    border-left: 1px solid var(--hairline);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.graph-panel-hdr {
+    flex-shrink: 0;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--hairline);
+}
+.graph-panel-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+.graph-panel-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+.graph-panel-close {
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 4px;
+}
+.graph-panel-close:hover { color: var(--ink); }
+
+.graph-axis-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.graph-axis-drop {
+    flex: 1;
+    min-width: 0;
+    border: 1.5px dashed var(--hairline-strong);
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+.graph-axis-drop:hover { border-color: var(--sage); background: var(--sage-tint); }
+.graph-axis-drop-label {
+    display: block;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    text-transform: uppercase;
+}
+.graph-axis-drop-value {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.graph-field-chips-label {
+    font-size: 10.5px;
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+.graph-field-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+.graph-field-chip {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--sage-deep);
+    background: var(--sage-tint);
+    border: 1px solid var(--sage-light);
+    border-radius: 12px;
+    padding: 4px 10px;
+    cursor: grab;
+    white-space: nowrap;
+}
+.graph-field-chip:hover { border-color: var(--sage); }
+.graph-field-chip.pending {
+    background: var(--sage);
+    color: var(--white);
+    border-color: var(--sage);
+}
+
+.graph-panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    position: relative;
+    padding: 10px 14px 14px;
+}
+.graph-panel-loading {
+    padding: 24px 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.graph-svg { display: block; }
+.graph-grid-line { stroke: var(--hairline); stroke-width: 1; }
+.graph-tick-label { font-size: 9px; fill: var(--muted); font-family: var(--sans); }
+.graph-axis-label { font-size: 10px; fill: var(--muted); font-family: var(--sans); font-weight: 600; }
+.graph-point { cursor: pointer; }
+.graph-point:hover { opacity: 0.85; }
+
+.graph-legend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--muted);
+}
+.graph-legend-ramp {
+    display: inline-block;
+    width: 60px;
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(to right, #FFF3B0, #F4A259, #C0392B);
+    flex-shrink: 0;
+}
+
+.graph-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--ink);
+    color: var(--white);
+    padding: 6px 10px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+    z-index: 5;
+    white-space: nowrap;
+    display: none;
+}
+.graph-tooltip-name { font-weight: 600; margin-bottom: 2px; }
+
+/* Field description tooltip (#graph-field-tooltip) -- unlike the point
+   hover tooltip above (a short one-liner, nowrap is right for it), a field
+   description is a full sentence and needs to wrap within the panel rather
+   than running off its edge. */
+.graph-field-tooltip {
+    white-space: normal;
+    max-width: 240px;
+    line-height: 1.4;
+}
+.graph-field-tooltip-title { font-weight: 600; margin-bottom: 3px; }
+.graph-tooltip-meta { color: rgba(255,255,255,0.65); font-family: var(--mono); font-size: 10px; letter-spacing: 0.03em; }
+
+.graph-panel-footnote {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--muted);
+}
 
 .cop-panel-hdr {
     display: flex;

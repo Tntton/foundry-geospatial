@@ -60,6 +60,8 @@ const State = {
     },
     sa3Data: null,
     sa2Data: null,                  // SEIFA SA2 polygons (F-06)
+    hospitalsGeojson: null,         // cached get_hospitals_geojson() result — used by both the map layer and the graph panel, see ensureHospitalsDataLoaded()
+    selectedHospitalName: null,     // HospitalName currently ringed on the map / highlighted in the graph panel
     clinicsData: [],                // flat, assembled view — see rebuildActiveClinicsData()
     clinicsByVertical: { gp: [], physio: [], dental: [] },  // per-vertical cache, Datasets-as-layers (plan Phase A)
     activeClinicLayers: ['gp'],     // which verticals' clinic pins are currently shown; scoring market's own layer is always included
@@ -533,6 +535,41 @@ async function fetchHospitalsGeojson() {
     const { data, error } = await supabase.rpc('get_hospitals_geojson');
     if (error) throw new Error(`Failed to load hospitals geojson: ${error.message}`);
     return data;
+}
+
+// Shared cache: hospitals data is needed by both the map layer
+// (ensureHospitalsLayerInner) and the graph panel, independent of whether the
+// map layer is actually toggled on. Both call this instead of
+// fetchHospitalsGeojson() directly so there's one fetch, one cache
+// (State.hospitalsGeojson), regardless of which one loads first.
+let _hospitalsDataLoad = null;
+async function ensureHospitalsDataLoaded() {
+    if (State.hospitalsGeojson) return State.hospitalsGeojson;
+    if (_hospitalsDataLoad) return _hospitalsDataLoad;
+    _hospitalsDataLoad = fetchHospitalsGeojson()
+        .then((gj) => { State.hospitalsGeojson = gj; return gj; })
+        .finally(() => { _hospitalsDataLoad = null; });
+    return _hospitalsDataLoad;
+}
+
+// Sequential pale-yellow -> deep-red ramp, low -> high percentile. Shared by
+// the hospitals map layer (ensureHospitalsLayerInner, as a Mapbox expression)
+// and the graph panel (as a plain JS function over a 0-100 number) so both
+// surfaces agree on what a given percentile looks like.
+function percentileRampExpr(percentileExpr) {
+    return ['interpolate', ['linear'], percentileExpr, 0, '#FFF3B0', 50, '#F4A259', 100, '#C0392B'];
+}
+function percentileRampColor(pct) {
+    if (pct == null || isNaN(pct)) return '#9A9A9A';
+    const stops = [[0, [255, 243, 176]], [50, [244, 162, 89]], [100, [192, 57, 43]]];
+    const p = Math.max(0, Math.min(100, pct));
+    let lo = stops[0], hi = stops[stops.length - 1];
+    for (let i = 0; i < stops.length - 1; i++) {
+        if (p >= stops[i][0] && p <= stops[i + 1][0]) { lo = stops[i]; hi = stops[i + 1]; break; }
+    }
+    const t = hi[0] === lo[0] ? 0 : (p - lo[0]) / (hi[0] - lo[0]);
+    const rgb = lo[1].map((c, i) => Math.round(c + (hi[1][i] - c) * t));
+    return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
 }
 
 async function fetchMmmBenchmark() {
@@ -2349,7 +2386,7 @@ async function ensureHospitalsLayer() {
 async function ensureHospitalsLayerInner() {
     let geojson;
     try {
-        geojson = await fetchHospitalsGeojson();
+        geojson = await ensureHospitalsDataLoaded();
     } catch (e) {
         console.warn('hospitals geojson load failed:', e);
         return;
@@ -2363,8 +2400,10 @@ async function ensureHospitalsLayerInner() {
     // (excluded from the underlying percentile calc for missing 2024-25
     // data) -- their contribution is 0/0 (not counted), not treated as 0th
     // percentile, so they don't silently drag a cluster's average down.
+    // generateId: true -- needed for map.setFeatureState-based selection
+    // rings (selectHospital()), same pattern already used by the sa3 source.
     map.addSource('hospitals', {
-        type: 'geojson', data: geojson, cluster: true, clusterMaxZoom: 6, clusterRadius: 50,
+        type: 'geojson', data: geojson, generateId: true, cluster: true, clusterMaxZoom: 6, clusterRadius: 50,
         // clusterProperties' shape is [reduceExpression, mapExpression], not a
         // single expression -- got this wrong the first time (silently
         // produced clusters with neither property set, no console error,
@@ -2388,21 +2427,17 @@ async function ensureHospitalsLayerInner() {
     // percentile. Grey for the 14 hospitals with no score (missing/suppressed
     // 2024-25 data) -- same "unknown, not zero" convention used elsewhere in
     // this app (e.g. ownership Unknown), not silently folded into the ramp.
-    const percentileRamp = (percentileExpr) => [
-        'interpolate', ['linear'], percentileExpr,
-        0, '#FFF3B0',
-        50, '#F4A259',
-        100, '#C0392B'
-    ];
+    // percentileRampExpr is shared with the graph panel's colour-by-percentile
+    // scatter points (percentileRampColor is its plain-JS equivalent).
     const clusterColor = [
         'case',
         ['==', ['get', 'scored_count'], 0], '#9A9A9A',
-        percentileRamp(['/', ['get', 'percentile_sum'], ['max', ['get', 'scored_count'], 1]])
+        percentileRampExpr(['/', ['get', 'percentile_sum'], ['max', ['get', 'scored_count'], 1]])
     ];
     const pinColor = [
         'case',
         ['==', ['get', 'DiversionOpportunityPercentile'], null], '#9A9A9A',
-        percentileRamp(['get', 'DiversionOpportunityPercentile'])
+        percentileRampExpr(['get', 'DiversionOpportunityPercentile'])
     ];
 
     addLayerSafe({
@@ -2439,10 +2474,12 @@ async function ensureHospitalsLayerInner() {
         source: 'hospitals',
         filter: ['!', ['has', 'point_count']],
         paint: {
-            'circle-radius': 5,
+            // Selected ring (via selectHospital()/feature-state) -- links a
+            // graph-panel scatter click to the matching map pin, and vice versa.
+            'circle-radius': ['case', ['boolean', ['feature-state', 'selected'], false], 8, 5],
             'circle-color': pinColor,
-            'circle-stroke-width': 1,
-            'circle-stroke-color': '#7A241C'
+            'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 3, 1],
+            'circle-stroke-color': ['case', ['boolean', ['feature-state', 'selected'], false], '#1B1B1B', '#7A241C']
         }
     });
 
@@ -2455,6 +2492,14 @@ async function ensureHospitalsLayerInner() {
             if (err) return;
             map.easeTo({ center: feature.geometry.coordinates, zoom, duration: 500 });
         });
+    });
+
+    // Map -> graph-panel linking: clicking a pin highlights the matching
+    // scatter point (selectHospital also handles graph-panel -> map, the
+    // other direction, when a scatter point is clicked).
+    map.on('click', 'hospitals-pins', (e) => {
+        if (!e.features.length) return;
+        selectHospital(e.features[0].properties.HospitalName, { flyTo: false });
     });
 
     const tooltip = document.getElementById('map-tooltip');
@@ -2490,6 +2535,55 @@ function removeHospitalsLayer() {
 
 function toggleHospitalsLayer(checked) {
     if (checked) ensureHospitalsLayer(); else removeHospitalsLayer();
+}
+
+// Bidirectional hospital selection: called both from a map pin click
+// (hospitals-pins click handler above, flyTo:false since we're already
+// there) and from the graph panel's scatter point click (GraphPanel calls
+// this with flyTo:true). Whichever side triggers it, both the map ring and
+// the graph panel's highlighted point are kept in sync.
+function selectHospital(hospitalName, opts = {}) {
+    if (!State.hospitalsGeojson || !hospitalName) return;
+    const features = State.hospitalsGeojson.features;
+    const idx = features.findIndex((f) => f.properties.HospitalName === hospitalName);
+    if (idx === -1) return;
+
+    State.selectedHospitalName = hospitalName;
+
+    const applyRing = () => {
+        if (!map.getSource('hospitals')) return;
+        features.forEach((f, i) => {
+            if (f.properties.HospitalName !== hospitalName) {
+                map.setFeatureState({ source: 'hospitals', id: i }, { selected: false });
+            }
+        });
+        map.setFeatureState({ source: 'hospitals', id: idx }, { selected: true });
+    };
+
+    if (map.getSource('hospitals')) {
+        applyRing();
+    } else {
+        // A hospital was selected from the graph panel while the map layer
+        // itself was never toggled on -- flying the map to an otherwise
+        // invisible point wouldn't actually "link" to anything visible, so
+        // load and show the layer (and reflect that in the Step 1 checkbox)
+        // before ringing it.
+        const checkbox = document.getElementById('layer-hospitals-checkbox');
+        if (checkbox) checkbox.checked = true;
+        ensureHospitalsLayer().then(applyRing);
+    }
+
+    const feature = features[idx];
+    if (opts.flyTo !== false && feature.geometry && feature.geometry.coordinates) {
+        map.flyTo({ center: feature.geometry.coordinates, zoom: Math.max(map.getZoom(), 11), essential: true });
+    }
+    // GraphPanel is a bare top-level `const` in graph-panel.js, same
+    // shared-global-scope convention as Copilot/TP -- not a window.*
+    // property even though it's loaded as a classic <script>, so it's
+    // checked via typeof here, not window.GraphPanel.
+    if (typeof GraphPanel !== 'undefined' && typeof GraphPanel.highlightPoint === 'function') {
+        GraphPanel.highlightPoint(hospitalName);
+    }
 }
 
 // ============================================================

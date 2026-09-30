@@ -18,7 +18,7 @@
     <!-- Supabase Auth -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    <link rel="stylesheet" href="css/styles.css?v=mob32" />
+    <link rel="stylesheet" href="css/styles.css?v=mob34" />
     <link rel="stylesheet" href="css/targets-tab.css?v=mob4" />
     <style>
         /* Hide login buttons */
@@ -178,6 +178,7 @@
                 <div id="clinic-search-status" style="display:none"></div>
             </div>
             <button class="cop-trigger-btn" onclick="Copilot.open()" title="Ask the assistant a question (⌘K)">✦ Ask AI <kbd>⌘K</kbd></button>
+            <button class="cop-trigger-btn" id="graph-trigger-btn" onclick="GraphPanel.toggle()" title="Plot two ED metrics against each other, linked to the map">⌗ Graph</button>
             <span class="action-meta">Data vintage · Mar 2025</span>
             <a class="nav-btn" href="#" onclick="window.location.href='methodology.html?market='+(window.State?.markets?.current||'gp'); return false;" style="text-decoration:none; color:inherit; cursor:pointer; display:flex; align-items:center;">Methodology</a>
             <button id="login-btn" class="nav-btn login">Login</button>
@@ -565,7 +566,7 @@
                                      hospital_ed_metrics/ed_lower_urgency_sa3 FK relationships, so it
                                      uses the standalone ensureHospitalsLayer() pattern like PHN, not
                                      toggleClinicLayer(). -->
-                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" onchange="toggleHospitalsLayer(this.checked)"><span class="clinic-layer-row-name">Hospitals</span></label>
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" id="layer-hospitals-checkbox" onchange="toggleHospitalsLayer(this.checked)"><span class="clinic-layer-row-name">Hospitals</span></label>
                             </div>
                         </div>
 
@@ -945,6 +946,22 @@
                     Controls
                 </button>
             </div>
+
+            <!-- Scatter-plot graph panel — a real flex sibling of
+                 .map-container (not an overlay), so it sits genuinely
+                 side-by-side with the map. Toggled via GraphPanel.toggle()
+                 (header button); see graph-panel.js. Scoped inside
+                 #subpanel-map so it's automatically hidden when the
+                 List/Targets tab is active, same as .map-container itself. -->
+            <div class="graph-resize-handle hidden" id="graph-resize-handle" title="Drag to resize"></div>
+            <aside class="graph-panel hidden" id="graph-panel">
+                <div class="graph-panel-hdr" id="graph-panel-hdr"></div>
+                <div class="graph-panel-body" id="graph-panel-body"></div>
+                <!-- Field description tooltip -- spans the whole panel (not
+                     scoped to graph-panel-body like #graph-tooltip is) since
+                     the field chips it describes live in the header. -->
+                <div class="graph-tooltip" id="graph-field-tooltip"></div>
+            </aside>
 
             </div><!-- /subpanel-map -->
 
@@ -2007,10 +2024,11 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr62"></script>
+<script src="js/app.js?v=rr63"></script>
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
+<script src="js/components/graph-panel.js?v=2"></script>
 
 <script>
 // Initialize left rail UI on page load
