@@ -561,6 +561,10 @@
                                      doesn't feed the composite) -- an ordinary secondary clinic layer via
                                      toggleClinicLayer(), not a bespoke mechanism. -->
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="aged_care" onchange="toggleClinicLayer('aged_care', this.checked)"><span class="clinic-layer-row-name">Aged Care Providers</span><span class="clinic-layer-count" id="clinic-layer-count-aged_care"></span></label>
+                                <!-- Pharmacy: same ordinary secondary clinic layer mechanism as
+                                     aged_care -- community pharmacies only (NHSD "Pharmacy service"),
+                                     hospital-internal pharmacies excluded, see schema.sql. -->
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="pharmacy" onchange="toggleClinicLayer('pharmacy', this.checked)"><span class="clinic-layer-row-name">Pharmacies</span><span class="clinic-layer-count" id="clinic-layer-count-pharmacy"></span></label>
                                 <!-- Hospitals is its own table (not clinics) -- no scoring market
                                      shape (format/billing/ownership), its analytical value is the
                                      hospital_ed_metrics/ed_lower_urgency_sa3 FK relationships, so it
@@ -2024,7 +2028,7 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr63"></script>
+<script src="js/app.js?v=rr64"></script>
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
