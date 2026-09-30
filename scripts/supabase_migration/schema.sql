@@ -1605,9 +1605,56 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('ownership_chain_classification', 'Ownership mix & chain penetration (corporate vs independent)', 'clinics (ownership, corporate_chain columns)', 'Foundry classification', null, 'Mar 2025', null),
   ('gp_billings', 'Bulk-billing rate, non-referred attendances', 'gp_billing_sa3_ltm', 'Services Australia (Medicare)', null, 'Dec 2024', null),
   ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)'),
+  ('pharmacies', 'Community pharmacy locations', 'clinics (market_id=pharmacy)', 'National Health Services Directory (NHSD)', null, 'Mar 2025', 'NHSD "Pharmacy service" rows only (5,526) -- "Hospital pharmacy service" rows (95, e.g. ''Belmont Hospital Pharmacy'') deliberately excluded as internal hospital departments, not standalone competing locations, already implicitly covered by the hospitals table. Loaded directly into clinics 2026-09-30 (same reference-layer pattern as aged_care -- markets.config {"scored": false}, no format/billing/ownership fields exist for this vertical); sa3: 5,522 of 5,526, sa2/sa4: 5,511 of 5,526 (ST_Contains boundary-seam misses, same class of gap as aged_care''s), phn: 5,526 of 5,526. get_clinics() needed no changes -- its existing explicit column list already covers every field this vertical uses.'),
   ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here. ED diversion opportunity score (hospitals.diversion_opportunity_score etc.) is a Foundry-derived analytical layer computed from this data 2026-09-29 -- not a raw AIHW field -- see the hospitals table definition and the score-computation block further down.'),
   ('ed_lower_urgency_sa3', 'ED presentations for lower-urgency care, by SA3 of usual residence', 'ed_lower_urgency_sa3', 'AIHW Table 4 (Use of emergency departments for lower-urgency care, 2017-18 to 2024-25)', null, '2017-18 to 2024-25 (2024-25 partial, 52 of 340 SA3s reported so far)', 'See the ed_lower_urgency_sa3 section further down for the row-filtering, demographic_type, and data-quality-code notes -- not repeated here.')
 on conflict (dataset_key) do nothing;
+
+-- Pharmacies -- NHSD "Pharmacy service" extract, same reference-layer
+-- pattern as aged_care (markets.config {"scored": false}, an ordinary
+-- secondary clinic layer via toggleClinicLayer(), never the primary scoring
+-- market). "Hospital pharmacy service" rows (95, e.g. "Belmont Hospital
+-- Pharmacy", "Lismore Base Hospital") were excluded at load time -- these are
+-- internal hospital pharmacy departments, not standalone competing retail
+-- locations, and the hospitals table already covers their parent facility.
+--
+-- Unlike aged_care, this needed no new clinics columns at all -- the source
+-- CSV (OBJECTID/ORGANISATION_NAME/ADDRESS/SUBURB/STATE/POSTCODE/LONGITUDE/
+-- LATITUDE/NHSD_SERVICE_ID/NHSD_SERVICE_TYPE/GNAF_ADDRESS_DETAIL_PID/
+-- GA_CLASS/GA_SOURCE_DATE) maps entirely onto existing generic clinics
+-- columns already used by GP (name/address/suburb/state_code/postcode/
+-- latitude/longitude/nhsd_service_id/nhsd_service_type/gnaf_address_id/
+-- geographic_area_class/geographic_source_date) -- no ownership/billing/
+-- format/rating data exists for this vertical, same gap as aged_care.
+-- clinic_id = nhsd_service_id (verified unique across all 5,526 rows, unlike
+-- GP's nhsd_service_id which has some duplicates -- OBJECTID would also have
+-- worked but nhsd_service_id is the more meaningful stable identifier).
+-- get_clinics() needed no changes -- its existing explicit ~50-column list
+-- already covers every field this vertical populates.
+--
+-- insert into markets (market_id, market_name, config, canonical_fields)
+-- values ('pharmacy', 'Pharmacy',
+--         '{"scored": false, "note": "reference layer only, no composite/tier scoring yet",
+--           "market_id": "pharmacy", "market_name": "Pharmacy",
+--           "clinic_fields": {"id": "clinic_id", "name": "clinic_name", "latitude": "latitude",
+--                              "longitude": "longitude", "sa3_code": "sa3_code", "sa3_name": "sa3_name"}}'::jsonb,
+--         '{}'::jsonb)
+-- on conflict (market_id) do nothing;
+--
+-- insert into clinics (
+--   market_id, clinic_id, name, address, suburb, state_code, state_name, postcode,
+--   latitude, longitude, nhsd_service_id, nhsd_service_type, gnaf_address_id,
+--   geographic_area_class, geographic_source_date
+-- ) values (...)  -- one row per CSV row where NHSD_SERVICE_TYPE = 'Pharmacy service'
+-- on conflict (market_id, clinic_id) do nothing;
+--
+-- Then location/sa3/sa2/sa2_area_km2/sa4_code/sa4_name/phn_code/phn_name were
+-- backfilled with the exact same ST_Contains / hierarchical-code-prefix /
+-- clinics-sourced-name-lookup queries as the aged_care block above -- not
+-- repeated here verbatim, see that block for the full pattern. Results:
+-- sa3: 5,522 of 5,526; sa2/sa4: 5,511 of 5,526 (boundary-seam misses, same
+-- class of gap as aged_care's); phn: 5,526 of 5,526 (100%). gccsa_code/
+-- gccsa_name and sa1_code left null, same deliberate gaps as aged_care.
 
 -- hospitals + hospital_ed_metrics -- built to
 -- support an "opportunity hospital" analysis (high low-urgency ED volume +
