@@ -569,6 +569,10 @@
                                      standalone radiology/imaging clinics only (ImagingFinder directory),
                                      hospital-based imaging departments excluded, see schema.sql. -->
                                 <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="radiology" onchange="toggleClinicLayer('radiology', this.checked)"><span class="clinic-layer-row-name">Radiology Clinics</span><span class="clinic-layer-count" id="clinic-layer-count-radiology"></span></label>
+                                <!-- Audiology: same ordinary secondary clinic layer mechanism --
+                                     Australian Government Hearing Services Program provider register,
+                                     mobile-only sites excluded, see schema.sql. -->
+                                <label class="mmm-chip-label clinic-layer-row"><input type="checkbox" class="clinic-layer-toggle" data-layer="audiology" onchange="toggleClinicLayer('audiology', this.checked)"><span class="clinic-layer-row-name">Audiology Clinics</span><span class="clinic-layer-count" id="clinic-layer-count-audiology"></span></label>
                                 <!-- Hospitals is its own table (not clinics) -- no scoring market
                                      shape (format/billing/ownership), its analytical value is the
                                      hospital_ed_metrics/ed_lower_urgency_sa3 FK relationships, so it
@@ -2032,7 +2036,7 @@
         </div>
     </div>
 </div>
-<script src="js/app.js?v=rr65"></script>
+<script src="js/app.js?v=rr66"></script>
 <script src="js/components/targets-tab.js?v=rr8"></script>
 <script src="js/components/right-rail.js?v=rr5" defer></script>
 <script src="js/components/copilot-panel.js?v=3"></script>
