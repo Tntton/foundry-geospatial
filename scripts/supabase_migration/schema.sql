@@ -1607,6 +1607,7 @@ insert into meta.dataset_registry (dataset_key, display_name, supabase_table, so
   ('aged_care_providers', 'Aged-care provider locations (residential care homes)', 'clinics (market_id=aged_care)', 'Aged Care Quality and Safety Commission (ACQSC)', null, 'Sep 2026', 'Geocoded via G-NAF (primary) + Mapbox fallback for G-NAF misses, medium-confidence or better only; 2,910 of 2,933 registered homes geocoded -- merged into clinics 2026-09-29 (2,933 of 2,933 rows), plus sa2/sa4 geography backfill (sa2/sa4: 2,902 of 2,933; sa3: 2,910 of 2,933) -- app.js rewired 2026-09-29 to load it via clinics/get_clinics(''aged_care'') same as GP/Physio/Dental (Step 1 + Data Catalogue both use the standard layerToggle mechanism now) -- standalone aged_care_providers table + get_aged_care_providers_geojson() RPC dropped 2026-09-29 once the rewire was confirmed working end-to-end (fully superseded by clinics, no remaining app.js references)'),
   ('pharmacies', 'Community pharmacy locations', 'clinics (market_id=pharmacy)', 'National Health Services Directory (NHSD)', null, 'Mar 2025', 'NHSD "Pharmacy service" rows only (5,526) -- "Hospital pharmacy service" rows (95, e.g. ''Belmont Hospital Pharmacy'') deliberately excluded as internal hospital departments, not standalone competing locations, already implicitly covered by the hospitals table. Loaded directly into clinics 2026-09-30 (same reference-layer pattern as aged_care -- markets.config {"scored": false}, no format/billing/ownership fields exist for this vertical); sa3: 5,522 of 5,526, sa2/sa4: 5,511 of 5,526 (ST_Contains boundary-seam misses, same class of gap as aged_care''s), phn: 5,526 of 5,526. get_clinics() needed no changes -- its existing explicit column list already covers every field this vertical uses.'),
   ('radiology_clinics', 'Standalone radiology/imaging clinic locations', 'clinics (market_id=radiology)', 'ImagingFinder directory (imagingfinder.com.au)', null, 'Sep 2026', '1,001 of 1,196 scraped listings -- the 193 "Hospitals"-category rows (imaging departments inside hospitals, e.g. an SKG Radiology desk at a private hospital) excluded as internal departments already implicitly covered by the hospitals table, not standalone competing locations, same call as pharmacy''s hospital-pharmacy exclusion; 2 more excluded for having no coordinates at all in the source. Scraped via the site''s own public GeoDirectory JSON API (wp-json/geodir/v2/places), not HTML scraping -- confirmed permitted by robots.txt. Same reference-layer pattern as pharmacy (markets.config {"scored": false}); unlike pharmacy, ownership/corporate_chain ARE populated (from the directory''s own chain-category field -- 256 of 1,001 independent, no named chain) since this source actually has that signal. sa3/phn: 1,001 of 1,001 (100%), sa2/sa4: 996 of 1,001 (boundary-seam misses, same class of gap as every other table here). ownership=''Corporate'' is simply "does the directory list a named chain for it" -- a handful of independent-bucketed clinics are themselves small multi-site groups the directory didn''t give their own top-level category (e.g. "Queensland Radiology Specialists"), so treat this as a coarse signal, not a verified classification.'),
+  ('audiology_clinics', 'Accredited audiology / hearing services clinic locations', 'clinics (market_id=audiology)', 'Australian Government Hearing Services Program provider register (hearingservices.gov.au)', null, 'Sep 2026', '2,433 of 2,523 scraped locations -- 27 excluded upfront (26 "mobile site" entries with no fixed address, 1 hospital visiting-specialist room), 63 more excluded for failing to geocode at >=0.7 Mapbox relevance (kept as a manual-review CSV rather than accepted at low confidence, same "no coordinates rather than a wrong one" bar as aged_care). Scraped via a reverse-engineered JSF/PrimeFaces AJAX postback flow (the visible Find button only clears the map panel; the real search fires via a hidden button using lat/lon set directly in hidden form fields -- no client-side geocoding needed to drive it), iterated over 2,454 SA2 centroids as search points since the tool is proximity-only (~20 results per search) with no bulk export or JSON API. No robots.txt restriction applies to this site. Geocoded via Mapbox (the app''s own existing public pk. token, not a new credential) since the source gives text addresses only, no coordinates -- 88% at high relevance (>=0.8) on the first pass, a second pass recovered another 50 by stripping the "CNR X AND Y" intersection clauses that trip up a structured address parser. Same reference-layer pattern as pharmacy/radiology (markets.config {"scored": false}). ownership=''Corporate'' means the provider name appears at more than one location nationally (e.g. Hearing Australia, Specsavers, Amplifon, Audika, Bloom Hearing, Connect Hearing -- 2,303 of 2,433) vs exactly one (130) -- a coarse chain-vs-solo-practice signal from location count alone, not a verified corporate structure. sa3/phn: 2,432-2,433 of 2,433 (~100%), sa2/sa4: 2,421 of 2,433 (boundary-seam misses, same class of gap as every other table here).'),
   ('hospital_ed_data', 'Public hospital ED presentations, timeliness and location', 'hospitals + hospital_ed_metrics', 'Australian Institute of Health and Welfare (AIHW) MyHospitals', null, 'Data as of 19 Aug 2026, version 2026081901', 'See the hospitals/hospital_ed_metrics section further down for the full geocoding provenance, table-consolidation rationale, and data-quality-code notes -- not repeated here. ED diversion opportunity score (hospitals.diversion_opportunity_score etc.) is a Foundry-derived analytical layer computed from this data 2026-09-29 -- not a raw AIHW field -- see the hospitals table definition and the score-computation block further down.'),
   ('ed_lower_urgency_sa3', 'ED presentations for lower-urgency care, by SA3 of usual residence', 'ed_lower_urgency_sa3', 'AIHW Table 4 (Use of emergency departments for lower-urgency care, 2017-18 to 2024-25)', null, '2017-18 to 2024-25 (2024-25 partial, 52 of 340 SA3s reported so far)', 'See the ed_lower_urgency_sa3 section further down for the row-filtering, demographic_type, and data-quality-code notes -- not repeated here.')
 on conflict (dataset_key) do nothing;
@@ -1716,6 +1717,98 @@ on conflict (dataset_key) do nothing;
 -- deliberate gaps as pharmacy/aged_care. get_clinics() needed no changes --
 -- its existing explicit column list already covers every field this
 -- vertical populates.
+
+-- Audiology clinics -- Australian Government Hearing Services Program
+-- provider register (hearingservices.gov.au), same reference-layer pattern
+-- as pharmacy/radiology (markets.config {"scored": false}). Source has no
+-- lat/lon at all (text address only), unlike radiology's source -- see the
+-- geocoding note below.
+--
+-- Scraping method: the site is IBM WebSphere Portal + JSF/PrimeFaces (no
+-- JSON API, no sitemap, no bulk export, no robots.txt restriction). The
+-- visible "Find" button only clears the map/details panel; the actual
+-- search fires via a second, hidden button (PrimeFaces.ab targeting
+-- lpdFrm-hiddenBtn, not lpdFrm-findBtn) using whatever values sit in the
+-- hidden latitudeHd/longitudeHd form fields at POST time -- there is no
+-- client-side-geocoding requirement to script around, those fields are set
+-- directly. The JSF ViewState token stayed valid across the entire run
+-- (confirmed: identical value echoed back after every request) -- one
+-- session/cookie-jar + one ViewState fetch covers the whole scrape, not a
+-- fresh one per search. Since the tool is proximity-only ("up to 20"
+-- results per search, department's own wording), full coverage means
+-- searching enough points to blanket the country: 2,454 SA2 centroids
+-- (computed via ST_Centroid on this project's own sa2 table) were used as
+-- search points, since audiology providers are sparse enough nationally
+-- (~3,000 locations vs 2,454 SA2s) that most searches return everything
+-- within a wide radius with heavy redundant overlap between neighbouring
+-- centroids -- deduped by (name, street, suburb, postcode). Result: 2,523
+-- unique locations from 2,454 searches, 22 transient timeout errors
+-- (99.1% search success), against the department's own published "more
+-- than 300 providers across 3,000 locations" figure.
+--
+-- 27 excluded before geocoding: 26 rows whose address was literally
+-- "MOBILE SITE" (no fixed location to plot) and 1 "visiting specialist
+-- rooms" at a hospital (an internal arrangement, not a standalone site,
+-- same class of exclusion as radiology's hospital-imaging-department call).
+--
+-- Geocoding: no coordinates in the source at all, unlike radiology. No
+-- Mapbox token was found in .env (empty -- likely rotated/cleared
+-- elsewhere this session) and no G-NAF table/API was available to reuse
+-- from the aged_care geocoding work, so this first tried OpenStreetMap
+-- Nominatim (free, no key, robots.txt-compliant at 1 req/sec) -- but only
+-- reached street-level precision on 48% of addresses before being stopped;
+-- Nominatim's OSM-derived index doesn't parse retail/medical-suite address
+-- forms well ("SHOP 2 34B ORIENT STREET", "TENANCY 12 BRIDGE PLAZA"). The
+-- app's own EXISTING public Mapbox pk. token (embedded client-side in
+-- src/js/app.js, not a new credential, and Mapbox's own docs describe pk.
+-- tokens as not secret) geocoded the same addresses far better -- switched
+-- to it entirely rather than keep a mixed-provenance dataset.
+--
+-- Two Mapbox passes, both using the real numeric `relevance` score
+-- Mapbox returns (not a custom heuristic) as geocode_confidence, matching
+-- the aged_care precedent: >=0.7 kept, below that excluded rather than
+-- accepted as a shaky match (a suburb-centroid dot at the wrong shopping
+-- centre is worse than no pin for a market map).
+--   1. Full address as given: 2,383 of 2,496 (95.5%) at >=0.7 relevance
+--      (88% of the *whole* set at >=0.8) on the first try.
+--   2. The 113 misses were retried after stripping the "(CNR|CORNER) ...
+--      (AND|&) ..." intersection clause many of them had (a structured
+--      address parser chokes on "CNR X AND Y"; the plain address or venue
+--      name alone usually resolves fine) -- recovered 50 more.
+-- Final: 2,433 of 2,496 geocoded (97.5%), 63 left in a manual-review CSV
+-- (mostly facility-name-first addresses like "HOSPITAL NAME STREET", or a
+-- literal "PO BOX" with no street address at all -- never geocodable).
+--
+-- insert into markets (market_id, market_name, config, canonical_fields)
+-- values ('audiology', 'Audiology',
+--         '{"scored": false, "note": "reference layer only, no composite/tier scoring yet",
+--           "market_id": "audiology", "market_name": "Audiology",
+--           "clinic_fields": {"id": "clinic_id", "name": "clinic_name", "latitude": "latitude",
+--                              "longitude": "longitude", "sa3_code": "sa3_code", "sa3_name": "sa3_name"}}'::jsonb,
+--         '{}'::jsonb)
+-- on conflict (market_id) do nothing;
+--
+-- insert into clinics (
+--   market_id, clinic_id, name, address, suburb, state_code, postcode,
+--   latitude, longitude, phone, website, ownership, corporate_chain,
+--   geocode_source, geocode_confidence
+-- ) values (...)  -- one row per successfully-geocoded, non-mobile listing
+-- on conflict (market_id, clinic_id) do nothing;
+--
+-- ownership='Corporate' iff the provider name appears at more than one
+-- location across the whole dataset (e.g. Hearing Australia, Specsavers,
+-- Amplifon, Audika, Bloom Hearing, Connect Hearing -- 2,303 of 2,433),
+-- else 'Independent' (130) -- a coarse location-count signal, not a
+-- verified corporate-structure classification (mirrors radiology's same
+-- caveat: a name appearing once could still be part of a chain that just
+-- has one location in this dataset).
+--
+-- Then location/sa3/sa2/sa2_area_km2/sa4_code/sa4_name/phn_code/phn_name
+-- were backfilled with the same ST_Contains / hierarchical-code-prefix
+-- queries as pharmacy/radiology/aged_care above -- not repeated here
+-- verbatim. Results: sa3: 2,432 of 2,433; phn: 2,433 of 2,433 (100%);
+-- sa2/sa4: 2,421 of 2,433 (boundary-seam misses, same class of gap as
+-- every other table here). get_clinics() needed no changes.
 
 -- hospitals + hospital_ed_metrics -- built to
 -- support an "opportunity hospital" analysis (high low-urgency ED volume +

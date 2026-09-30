@@ -804,6 +804,34 @@ const LEGACY_COLUMN_MAP = {
         nhsd_service_type: row.nhsd_service_type,
         gnaf_address_id: row.gnaf_address_id,
     }),
+    // Never a scoring market (markets.config: {"scored": false}), same
+    // reference-layer pattern as pharmacy/radiology. ownership/corporate_chain
+    // ARE populated (a provider name appearing at >1 location nationally
+    // counts as a "chain" -- a coarse signal, not a verified corporate
+    // structure -- see schema.sql). clinic_format/billing_type have no
+    // equivalent in this source, same gap as pharmacy.
+    audiology: (row) => ({
+        clinic_id: row.clinic_id,
+        clinic_name: row.name,
+        'Corporate Chain': row.corporate_chain,
+        ownership: row.ownership,
+        website: row.website,
+        phone: row.phone,
+        address: row.address,
+        suburb: row.suburb,
+        state_code: row.state_code,
+        state_name: row.state_name,
+        postcode: row.postcode,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        sa2_code: row.sa2_code,
+        sa2_name: row.sa2_name,
+        sa2_area_km2: row.sa2_area_km2,
+        sa3_code: row.sa3_code,
+        sa3_name: row.sa3_name,
+        sa4_code: row.sa4_code,
+        sa4_name: row.sa4_name,
+    }),
 };
 
 async function fetchClinicsForMarket(marketId) {
@@ -1122,7 +1150,7 @@ function renderClinicLayerCheckboxes() {
     // Phase E); there's no lightweight count-only query to prefetch all
     // three up front, so an un-toggled layer's count stays blank until its
     // first load rather than guessing a number.
-    ['gp', 'physio', 'dental', 'aged_care', 'pharmacy', 'radiology'].forEach((layer) => {
+    ['gp', 'physio', 'dental', 'aged_care', 'pharmacy', 'radiology', 'audiology'].forEach((layer) => {
         const el = document.getElementById('clinic-layer-count-' + layer);
         if (!el) return;
         const cached = State.clinicsByVertical[layer];
@@ -3157,6 +3185,7 @@ const CATALOGUE_CATEGORIES = [
                 { label: 'Aged-care provider locations', hint: 'Aged Care Quality and Safety Commission · Sep 2026 — 2,910 of 2,933 registered residential homes geocoded (G-NAF + Mapbox for G-NAF misses, medium-confidence or better only)', layerToggle: 'aged_care', type: 'PINS' },
                 { label: 'Pharmacy locations', hint: 'National Health Services Directory (NHSD) · Mar 2025 — 5,526 community pharmacies (hospital-internal pharmacies excluded)', layerToggle: 'pharmacy', type: 'PINS' },
                 { label: 'Radiology clinic locations', hint: 'ImagingFinder directory · Sep 2026 — 1,001 standalone radiology/imaging clinics (hospital-based imaging departments excluded)', layerToggle: 'radiology', type: 'PINS' },
+                { label: 'Audiology clinic locations', hint: 'Australian Government Hearing Services Program provider register · Sep 2026 — 2,433 accredited hearing services locations (mobile-only sites excluded)', layerToggle: 'audiology', type: 'PINS' },
             ]},
             { name: 'Density & Saturation', items: [
                 { label: 'Clinics per 10,000 residents', hint: 'Derived · NHSD × ABS ERP — the Supply input, feeds the composite', locked: true, type: 'REGION' },
