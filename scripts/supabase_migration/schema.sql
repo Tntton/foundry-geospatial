@@ -1684,7 +1684,15 @@ create table if not exists hospitals (
   overflow_rate numeric,                     -- 1 - pct_within_4hrs for category='All patients', ed_score_year -- higher = more overflowed
   overflow_rate_percentile numeric,          -- percent_rank() of overflow_rate across scored hospitals, 0-100
   diversion_opportunity_score numeric,       -- average of the two percentiles above (0-100) -- equal-weighted volume + overflow
-  diversion_opportunity_percentile numeric   -- percent_rank() of diversion_opportunity_score across scored hospitals, 0-100 -- what the map colours by
+  diversion_opportunity_percentile numeric,  -- percent_rank() of diversion_opportunity_score across scored hospitals, 0-100 -- what the map colours by
+
+  -- Raw wait-time minutes -- added for the scatter-plot graph feature (plot
+  -- volume against wait time directly, not just the derived overflow_rate).
+  -- Same source row as overflow_rate (hospital_ed_metrics, category='All
+  -- patients', ed_score_year) -- populated for the same 292 hospitals, same
+  -- null-for-unscored convention.
+  median_wait_minutes int,                   -- median_minutes from hospital_ed_metrics, category='All patients', ed_score_year -- typical ED wait
+  p90_wait_minutes int                       -- p90_minutes from hospital_ed_metrics, category='All patients', ed_score_year -- worst-case (overcrowding signal) ED wait
 );
 create index if not exists hospitals_location_idx on hospitals using gist (location);
 
@@ -1812,6 +1820,8 @@ create policy "public read" on hospital_ed_metrics for select using (true);
 --           'LowUrgencyVolumePercentile', low_urgency_volume_percentile,
 --           'OverflowRate', overflow_rate,
 --           'OverflowRatePercentile', overflow_rate_percentile,
+--           'MedianWaitMinutes', median_wait_minutes,
+--           'P90WaitMinutes', p90_wait_minutes,
 --           'DiversionOpportunityScore', diversion_opportunity_score,
 --           'DiversionOpportunityPercentile', diversion_opportunity_percentile
 --         )
@@ -1866,6 +1876,24 @@ create policy "public read" on hospital_ed_metrics for select using (true);
 --   diversion_opportunity_score = f.diversion_opportunity_score,
 --   diversion_opportunity_percentile = f.diversion_opportunity_percentile
 -- from final f where h.hospital_name = f.hospital_name;
+
+-- Raw wait-time minutes -- built for the scatter-plot graph feature so
+-- "volume" can be plotted against actual wait time, not just the derived
+-- overflow_rate. Same source cell as overflow_rate (hospital_ed_metrics,
+-- category='All patients', matched hospitals.ed_score_year) -- run once,
+-- after the diversion-score block above, since it reuses ed_score_year
+-- already populated there rather than recomputing it. Populated for the
+-- same 292 of 306 hospitals (join naturally yields nothing for the 14
+-- unscored ones -- no CTE/percentile-rank complexity needed here, this is a
+-- straight lookup, not a computed rank).
+-- update hospitals h set
+--   median_wait_minutes = m.median_minutes,
+--   p90_wait_minutes = m.p90_minutes
+-- from hospital_ed_metrics m
+-- where m.hospital_name = h.hospital_name
+--   and m.year = h.ed_score_year
+--   and m.category = 'All patients'
+--   and h.ed_score_year is not null;
 
 -- ed_lower_urgency_sa3 -- AIHW's "Use of emergency departments for lower
 -- urgency care" report, Table 4 (by SA3 of usual residence). Unlike
