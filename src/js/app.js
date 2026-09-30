@@ -751,6 +751,35 @@ const LEGACY_COLUMN_MAP = {
         geocode_source: row.geocode_source,
         geocode_confidence: row.geocode_confidence,
     }),
+    // Never a scoring market (markets.config: {"scored": false}), same
+    // reference-layer pattern as aged_care/pharmacy. Unlike those two,
+    // ownership/corporate_chain ARE populated here (from the source
+    // directory's own "chain" category -- 256 of 1,001 are independent, no
+    // named chain) -- clinic_format/billing_type still have no equivalent
+    // in this source, same gap as pharmacy.
+    radiology: (row) => ({
+        clinic_id: row.clinic_id,
+        clinic_name: row.name,
+        'Corporate Chain': row.corporate_chain,
+        ownership: row.ownership,
+        website: row.website,
+        phone: row.phone,
+        email: row.email,
+        address: row.address,
+        suburb: row.suburb,
+        state_code: row.state_code,
+        state_name: row.state_name,
+        postcode: row.postcode,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        sa2_code: row.sa2_code,
+        sa2_name: row.sa2_name,
+        sa2_area_km2: row.sa2_area_km2,
+        sa3_code: row.sa3_code,
+        sa3_name: row.sa3_name,
+        sa4_code: row.sa4_code,
+        sa4_name: row.sa4_name,
+    }),
     // Never a scoring market (markets.config: {"scored": false}), same as
     // aged_care -- a plain secondary layer via toggleClinicLayer(), no
     // format/billing/ownership data exists for pharmacies (NHSD's Pharmacy
@@ -1093,7 +1122,7 @@ function renderClinicLayerCheckboxes() {
     // Phase E); there's no lightweight count-only query to prefetch all
     // three up front, so an un-toggled layer's count stays blank until its
     // first load rather than guessing a number.
-    ['gp', 'physio', 'dental', 'aged_care', 'pharmacy'].forEach((layer) => {
+    ['gp', 'physio', 'dental', 'aged_care', 'pharmacy', 'radiology'].forEach((layer) => {
         const el = document.getElementById('clinic-layer-count-' + layer);
         if (!el) return;
         const cached = State.clinicsByVertical[layer];
@@ -3127,6 +3156,7 @@ const CATALOGUE_CATEGORIES = [
                 // candidate vertical to properly stand up later.
                 { label: 'Aged-care provider locations', hint: 'Aged Care Quality and Safety Commission · Sep 2026 — 2,910 of 2,933 registered residential homes geocoded (G-NAF + Mapbox for G-NAF misses, medium-confidence or better only)', layerToggle: 'aged_care', type: 'PINS' },
                 { label: 'Pharmacy locations', hint: 'National Health Services Directory (NHSD) · Mar 2025 — 5,526 community pharmacies (hospital-internal pharmacies excluded)', layerToggle: 'pharmacy', type: 'PINS' },
+                { label: 'Radiology clinic locations', hint: 'ImagingFinder directory · Sep 2026 — 1,001 standalone radiology/imaging clinics (hospital-based imaging departments excluded)', layerToggle: 'radiology', type: 'PINS' },
             ]},
             { name: 'Density & Saturation', items: [
                 { label: 'Clinics per 10,000 residents', hint: 'Derived · NHSD × ABS ERP — the Supply input, feeds the composite', locked: true, type: 'REGION' },
